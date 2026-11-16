@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f4ef">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="株ラボ">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>株ラボ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f5f4ef;--card:#fffefb;--ink:#15181c;--mu:#7b7f86;--line:#e4e2da;--soft:#efede6;
+  --acc:#0f5c47;--up:#0f7a55;--dn:#b8392e;--warn:#9a6a12;--bench:#9aa0a8;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --head:"Zen Kaku Gothic New",-apple-system,"Hiragino Sans",sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:15px;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}
+input,select{font:inherit;color:var(--ink)}
+.hidden{display:none!important}
+main{max-width:720px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 96px)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+
+/* header */
+.top{display:flex;align-items:baseline;justify-content:space-between;margin:2px 0 16px}
+.brand{font-family:var(--head);font-weight:700;font-size:26px;letter-spacing:.06em;margin:0}
+.brand small{font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.12em;color:var(--mu);margin-left:8px;text-transform:uppercase}
+.paperflag{font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--acc);border:1px solid var(--acc);border-radius:999px;padding:3px 9px}
+
+/* cards & form */
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.card h2{font-family:var(--head);font-size:16px;margin:0 0 12px;font-weight:700}
+.row{margin-bottom:14px}
+.row:last-child{margin-bottom:0}
+.lab{display:block;font-size:12px;color:var(--mu);margin-bottom:6px;letter-spacing:.04em}
+.in,select.in{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:11px 12px;font-size:16px;appearance:none;-webkit-appearance:none}
+.in:focus{outline:2px solid var(--acc);outline-offset:-1px;background:#fff}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.hint{font-size:12px;color:var(--mu);margin:6px 0 0;line-height:1.55}
+.seg{display:flex;background:var(--soft);border-radius:11px;padding:3px;gap:2px}
+.seg button{flex:1;border:none;background:none;padding:8px 4px;border-radius:9px;font-size:13px;color:var(--mu);white-space:nowrap}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+details.more{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+details.more summary{font-size:13px;color:var(--acc);cursor:pointer;list-style:none}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary::before{content:"＋ "}
+details.more[open] summary::before{content:"－ "}
+details.more .body{margin-top:12px}
+.btn{display:block;width:100%;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;background:var(--ink);color:#fff}
+.btn:disabled{opacity:.45}
+.btn.acc{background:var(--acc)}
+.btn.ghost{background:none;border:1px solid var(--line);color:var(--ink);font-weight:500}
+.btn.danger{background:none;border:1px solid var(--dn);color:var(--dn);font-weight:500}
+.btns{display:flex;gap:8px}.btns .btn{flex:1}
+
+/* results */
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px}
+.kpi{background:var(--card);padding:11px 10px}
+.kpi .k{font-size:11px;color:var(--mu);letter-spacing:.04em}
+.kpi .v{font-family:var(--mono);font-size:17px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+.kpi .s{font-family:var(--mono);font-size:11px;color:var(--mu);margin-top:2px}
+.cmp{font-size:13px;line-height:1.6;background:var(--soft);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.chart{width:100%;height:auto;display:block;touch-action:pan-y}
+.chartwrap{position:relative;margin:4px 0 6px}
+.tip{position:absolute;top:0;pointer-events:none;background:var(--ink);color:#fff;font-family:var(--mono);font-size:11px;padding:4px 7px;border-radius:6px;white-space:nowrap;transform:translateX(-50%)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--mu);margin-bottom:4px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.symseg{display:flex;gap:6px;overflow-x:auto;margin:14px 0 8px;scrollbar-width:none}
+.symseg button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 12px;font-size:13px;white-space:nowrap}
+.symseg button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.notes{font-size:12px;color:var(--warn);background:#fbf4e4;border-radius:10px;padding:9px 12px;margin:10px 0;line-height:1.6}
+table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t th{font-size:11px;font-weight:500;color:var(--mu);text-align:right;padding:6px 4px;border-bottom:1px solid var(--line)}
+table.t td{text-align:right;padding:8px 4px;border-bottom:1px solid var(--soft);font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+table.t th:first-child,table.t td:first-child{text-align:left}
+table.t td.side-buy{color:var(--up)} table.t td.side-sell{color:var(--dn)}
+.tscroll{overflow-x:auto;max-height:420px;overflow-y:auto}
+.empty{color:var(--mu);font-size:13px;text-align:center;padding:24px 8px;line-height:1.7}
+.err{color:var(--dn);font-size:13px;margin-top:10px;white-space:pre-wrap}
+
+/* bots */
+.banner{display:flex;gap:10px;align-items:center;background:#e7f0ec;color:var(--acc);border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:14px;line-height:1.5}
+.bot{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin-bottom:10px}
+.bot .h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.bot .name{font-weight:600;font-size:15px}
+.bot .sub{font-size:12px;color:var(--mu);margin-top:3px}
+.bot .eq{font-family:var(--mono);font-size:18px;font-weight:600;text-align:right;white-space:nowrap}
+.bot .pl{font-family:var(--mono);font-size:12px;text-align:right}
+.badge{display:inline-block;font-size:11px;border-radius:999px;padding:2px 8px;margin-top:8px}
+.badge.on{background:#e3f1ea;color:var(--up)} .badge.off{background:var(--soft);color:var(--mu)} .badge.halt{background:#fbe9e6;color:var(--dn)}
+.spark{width:100%;height:36px;display:block;margin-top:8px}
+
+/* sheet */
+.sheet{position:fixed;inset:0;z-index:30;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sheet .inner{max-width:720px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 30px)}
+.sheethead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px}
+.sheethead h2{font-family:var(--head);font-size:19px;margin:0}
+.close{border:none;background:var(--soft);border-radius:999px;width:34px;height:34px;font-size:18px;flex:none}
+.msg{font-size:12px;color:var(--mu);white-space:pre-wrap;line-height:1.6;background:var(--soft);border-radius:10px;padding:9px 12px;margin-bottom:12px}
+
+/* tabs */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:rgba(245,244,239,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--line);display:flex;justify-content:center;padding-bottom:env(safe-area-inset-bottom)}
+.tabs button{flex:1;max-width:200px;border:none;background:none;padding:10px 0 9px;font-size:11px;color:var(--mu);display:flex;flex-direction:column;align-items:center;gap:3px}
+.tabs button svg{width:22px;height:22px}
+.tabs button.on{color:var(--ink);font-weight:600}
+
+/* auth */
+.auth{max-width:380px;margin:12vh auto 0;text-align:center}
+.auth .brand{font-size:34px;margin-bottom:6px}
+.auth p{color:var(--mu);font-size:13px;margin:0 0 26px}
+.auth .in{margin-bottom:10px;background:var(--card)}
+.linkbtn{border:none;background:none;color:var(--mu);font-size:13px;margin-top:14px;text-decoration:underline}
+
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 84px);transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:10px 16px;border-radius:999px;font-size:13px;opacity:0;transition:.2s;z-index:50;pointer-events:none;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.keyrow{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--soft);font-size:14px}
+.keyrow:last-child{border-bottom:none}
+.ok{color:var(--up);font-weight:600}.ng{color:var(--dn);font-weight:600}
+ol.steps{margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.75}
+ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+  <!-- ログイン -->
+  <section id="auth" class="auth hidden">
+    <h1 class="brand">株ラボ</h1>
+    <p>バックテストと模擬取引</p>
+    <form id="authForm">
+      <input id="email" class="in" type="email" placeholder="メールアドレス" autocomplete="email" required>
+      <input id="password" class="in" type="password" placeholder="パスワード" autocomplete="current-password" required>
+      <button id="authBtn" class="btn" type="submit">ログイン</button>
+    </form>
+    <div id="authMsg" class="err"></div>
+  </section>
+
+  <section id="app" class="hidden">
+    <header class="top">
+      <h1 class="brand">株ラボ<small>Backtest · Paper</small></h1>
+      <span class="paperflag">模擬のみ</span>
+    </header>
+
+    <!-- 検証（バックテスト） -->
+    <div id="vBT">
+      <div class="card">
+        <h2>戦略を過去のデータで試す</h2>
+        <div class="row">
+          <div class="seg" id="btMarket"><button data-v="JP" class="on">日本株</button><button data-v="US">米国株</button></div>
+        </div>
+        <div class="row">
+          <label class="lab" for="btSymbols">銘柄（カンマ区切り・10銘柄まで）</label>
+          <input id="btSymbols" class="in" placeholder="7203, 6758" autocapitalize="characters" autocomplete="off">
+          <p class="hint" id="btSymHint">4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）</p>
+        </div>
+        <div class="row">
+          <span class="lab">期間</span>
+          <div class="seg" id="btPeriod"><button data-v="1">1年</button><button data-v="2" class="on">2年</button><button data-v="5">5年</button><button data-v="10">10年</button><button data-v="0">全部</button></div>
+        </div>
+        <div class="row">
+          <label class="lab" for="btStrategy">戦略</label>
+          <select id="btStrategy" class="in"></select>
+          <p class="hint" id="btDesc"></p>
+        </div>
+        <div class="row grid3" id="btParams"></div>
+        <details class="more">
+          <summary>細かい設定</summary>
+          <div class="body">
+            <div class="row grid2">
+              <div><label class="lab" for="btCash" id="btCashLab">初期資金（円）</label><input id="btCash" class="in num" inputmode="numeric"></div>
+              <div><label class="lab" for="btLot">売買単位</label><select id="btLot" class="in"></select></div>
+            </div>
+            <div class="row grid2">
+              <div><label class="lab" for="btSl">損切り（%・0でなし）</label><input id="btSl" class="in num" inputmode="decimal" value="0"></div>
+              <div><label class="lab" for="btTp">利確（%・0でなし）</label><input id="btTp" class="in num" inputmode="decimal" value="0"></div>
+            </div>
+            <div class="row grid3">
+              <div><label class="lab" for="btFee">手数料（%）</label><input id="btFee" class="in num" inputmode="decimal" value="0"></div>
+              <div><label class="lab" for="btSlip">滑り（%）</label><input id="btSlip" class="in num" inputmode="decimal" value="0.1"></div>
+              <div><label class="lab" for="btPos">1銘柄上限（%）</label><input id="btPos" class="in num" inputmode="decimal" value="100"></div>
+            </div>
+            <p class="hint">終値でシグナルを判定し、翌営業日の始値で約定する前提です。「滑り」は約定値が不利にずれる分の見込みです。複数銘柄のときは資金を銘柄数で等分します。</p>
+          </div>
+        </details>
+        <div style="margin-top:16px"><button class="btn" id="btRun">検証する</button></div>
+        <div class="err" id="btErr"></div>
+      </div>
+
+      <div id="btOut" class="hidden">
+        <div class="card">
+          <h2 id="btTitle">結果</h2>
+          <div class="kpis" id="btKpis"></div>
+          <div class="cmp" id="btCmp"></div>
+          <div class="legend"><span><i style="background:var(--acc)"></i>この戦略</span><span><i style="background:var(--bench)"></i>買って持ち続けた場合</span></div>
+          <div class="chartwrap"><svg class="chart" id="btEqChart"></svg></div>
+          <div class="symseg" id="btSymSeg"></div>
+          <div class="legend"><span><i style="background:var(--ink)"></i>株価（調整後）</span><span style="color:var(--up)">▲ 買い</span><span style="color:var(--dn)">▼ 売り</span></div>
+          <div class="chartwrap"><svg class="chart" id="btPxChart"></svg></div>
+          <div id="btNotes"></div>
+        </div>
+        <div class="card">
+          <h2>取引の一覧 <span class="mu num" id="btTradeCount" style="font-size:12px;font-weight:400"></span></h2>
+          <div class="tscroll"><table class="t" id="btTrades"></table></div>
+        </div>
+        <button class="btn acc" id="btToPaper">この設定で模擬取引を始める</button>
+        <p class="hint" style="text-align:center">過去の成績は将来の成績を約束しません。模擬取引で、これから先のデータでも通用するか確かめましょう。</p>
+      </div>
+    </div>
+
+    <!-- 模擬取引 -->
+    <div id="vPaper" class="hidden">
+      <div class="banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <div>仮想のお金で売買します。実際の証券口座には一切注文を出しません。毎営業日の引け後に自動で更新されます。</div>
+      </div>
+      <div id="botList"></div>
+      <button class="btn danger" id="stopAll" style="margin-top:6px">すべてのボットを停止</button>
+    </div>
+
+    <!-- 設定 -->
+    <div id="vSet" class="hidden">
+      <div class="card">
+        <h2>株価データの接続</h2>
+        <div id="keyStatus"><div class="empty"><span class="spin"></span>確認中…</div></div>
+      </div>
+      <div class="card">
+        <h2>日本株：J-Quants（JPX公式）</h2>
+        <ol class="steps">
+          <li>J-Quants（jpx-jquants.com）でユーザー登録し、プランを選ぶ（無料プランから可）</li>
+          <li>ダッシュボードの「設定 → APIキー」でAPIキーを発行</li>
+          <li>Supabase → Edge Functions → Secrets に <code>JQUANTS_API_KEY</code> として登録</li>
+        </ol>
+        <p class="hint">無料プランは過去2年分・12週間遅れのデータです。バックテストは無料で試せます。模擬取引を「今日の株価」で回すにはライトプラン（月1,650円）以上が必要です（無料プランでも12週間遅れで模擬取引は進みます）。</p>
+      </div>
+      <div class="card">
+        <h2>米国株：Tiingo</h2>
+        <ol class="steps">
+          <li>Tiingo（tiingo.com）で無料アカウントを作る</li>
+          <li>アカウント設定の「API → Token」でトークンをコピー</li>
+          <li>Supabase → Edge Functions → Secrets に <code>TIINGO_API_KEY</code> として登録</li>
+        </ol>
+        <p class="hint">無料プランで長期の日足データが取れます（個人利用）。</p>
+      </div>
+      <div class="card">
+        <h2>アカウント</h2>
+        <p class="hint" id="whoami" style="margin:0 0 12px"></p>
+        <button class="btn ghost" id="logout">ログアウト</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs hidden" id="tabs">
+  <button data-v="vBT" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-7"/></svg>検証</button>
+  <button data-v="vPaper"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>模擬取引</button>
+  <button data-v="vSet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>設定</button>
+</nav>
+
+<!-- 模擬取引を始める -->
+<div class="sheet hidden" id="newBot">
+  <div class="inner">
+    <div class="sheethead"><h2>模擬取引を始める</h2><button class="close" data-close="newBot">×</button></div>
+    <div class="card">
+      <div class="row"><label class="lab" for="nbName">名前</label><input id="nbName" class="in" maxlength="40"></div>
+      <div class="row"><label class="lab" for="nbCash" id="nbCashLab">仮想の資金</label><input id="nbCash" class="in num" inputmode="numeric"></div>
+      <p class="hint" id="nbSummary"></p>
+    </div>
+    <div class="card">
+      <h2>安全装置</h2>
+      <div class="row grid3">
+        <div><label class="lab" for="nbTrades">1日の取引上限（回）</label><input id="nbTrades" class="in num" inputmode="numeric" value="4"></div>
+        <div><label class="lab" for="nbDaily">1日の損失で停止（%）</label><input id="nbDaily" class="in num" inputmode="decimal" value="5"></div>
+        <div><label class="lab" for="nbDD">最高値から下落で停止（%）</label><input id="nbDD" class="in num" inputmode="decimal" value="20"></div>
+      </div>
+      <p class="hint">条件にかかるとボットは自動で止まり、出していた注文も取り消します。持っている株はそのまま残ります。将来、本番の発注をつなぐときもこの仕組みをそのまま使います。</p>
+    </div>
+    <button class="btn acc" id="nbCreate">始める</button>
+    <div class="err" id="nbErr"></div>
+  </div>
+</div>
+
+<!-- ボットの詳細 -->
+<div class="sheet hidden" id="botSheet">
+  <div class="inner">
+    <div class="sheethead"><h2 id="bsName"></h2><button class="close" data-close="botSheet">×</button></div>
+    <div id="bsBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="config.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

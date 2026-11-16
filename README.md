@@ -1,1 +1,26 @@
-# stock-trader
+# 株ラボ（stock-trader）
+
+日本株・米国株の売買戦略を **バックテスト** して、良さそうなものを **模擬取引（ペーパートレード）** で走らせるアプリ。
+実際の証券口座には一切注文を出さない。
+
+- 画面：GitHub Pages（`index.html` / `app.js`）
+- 売買エンジン：`engine.js`（バックテストと模擬取引で同じコードを使う。Edge Function にも同じものを置く）
+- データ・模擬取引：Supabase（「quruquruyuki's Project」に同居。テーブルは `st_` で始まる）
+- Edge Function：`stock-trader`（`supabase/functions/stock-trader/`）
+- 自動実行：pg_cron で平日 18:10（日本株の引け後）と翌朝 8:10（米国株の引け後）に全ボットを進める
+
+## 売買のルール
+- 日足。その日の終値でシグナルを判定し、**翌営業日の始値**で約定（滑り＝スリッページを上乗せ）
+- 買いのみ（空売りなし）。複数銘柄は資金を銘柄数で等分
+- 戦略：移動平均クロス／RSI逆張り／高値ブレイク／買って持ち続ける（比較用）＋損切り・利確
+- 安全装置（模擬取引）：1日の取引回数上限、1日の損失で停止、最高値からの下落で停止、全ボット停止ボタン
+
+## 株価データ（初回だけ設定）
+Supabase → Edge Functions → Secrets に登録する。
+- `JQUANTS_API_KEY`：J-Quants（JPX公式）のAPIキー。無料プランは過去2年・12週間遅れ。最新の株価で模擬取引するならライトプラン以上
+- `TIINGO_API_KEY`：Tiingo のAPIトークン（米国株、無料プランで可）
+- `ALLOWED_EMAIL`：他のアプリと共用（設定済み）
+
+## 本番運用に進むとき（まだ作っていない）
+`engine.js` の注文（`state.pending`）を証券会社のAPI（kabuステーションAPI、moomoo OpenAPI など）に流す部分を足す。
+安全装置はそのまま使う。
