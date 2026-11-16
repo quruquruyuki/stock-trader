@@ -106,3 +106,6 @@ grant select on public.st_push_subs to authenticated;
 -- 恐怖指数（VIX・日経平均VI）を market='IX' として保存する
 alter table public.st_symbols drop constraint if exists st_symbols_market_check;
 alter table public.st_symbols add constraint st_symbols_market_check check (market in ('JP','US','IX'));
+
+-- 週末のまとめ通知（毎週土曜 8:30 JST）
+select cron.schedule('stock-weekly-summary', '30 23 * * 5', $$select net.http_post(url := 'https://oqtyorwlrnrcyjxiassg.supabase.co/functions/v1/stock-weekly', body := '{}'::jsonb, headers := jsonb_build_object('Content-Type','application/json','x-cron-key',(select value from public.st_config where key='cron_key')), timeout_milliseconds := 120000)$$);

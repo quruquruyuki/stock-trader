@@ -449,9 +449,11 @@ async function loadBots() {
   if (!bots.length) {
     $("botList").innerHTML = `<div class="card empty">まだ模擬取引のボットはありません。<br>「検証」タブで戦略を試して、<br>「この設定で模擬取引を始める」を押してください。</div>`;
     $("stopAll").classList.add("hidden");
+    $("cmpCard").classList.add("hidden");
     return;
   }
   $("stopAll").classList.toggle("hidden", !bots.some(b => b.active));
+  loadCompare().catch(e => console.error(e));
   $("botList").innerHTML = bots.map(b => {
     const eq = botEquity(b), init = b.cfg.initialCash, pl = (eq / init - 1) * 100;
     return `<button class="bot" data-id="${b.id}">
@@ -467,6 +469,48 @@ $("stopAll").onclick = async () => {
   if (!confirm("稼働中のボットをすべて停止します。よろしいですか？")) return;
   try { await call("stop_all"); toast("すべて停止しました"); loadBots(); } catch (e) { toast(e.message); }
 };
+
+/* ---------- ボットの比較 ---------- */
+const CMP_COLORS = ["#0f5c47", "#c0392b", "#2c6fbb", "#b7791f", "#7b4bb3", "#15181c", "#1a9c8c", "#d2577a"];
+let cmpDays = 90, cmpData = null;
+async function loadCompare() {
+  if (bots.length < 2) { $("cmpCard").classList.add("hidden"); return; }
+  const ids = bots.map(b => b.id), eq = {}, tr = {};
+  for (let off = 0; off < 20000; off += 1000) {
+    const { data } = await sb.from("st_equity").select("bot_id,d,equity").in("bot_id", ids).order("d").range(off, off + 999);
+    for (const r of data || []) (eq[r.bot_id] ||= []).push({ d: r.d, v: r.equity });
+    if (!data || data.length < 1000) break;
+  }
+  for (let off = 0; off < 20000; off += 1000) {
+    const { data } = await sb.from("st_trades").select("bot_id").in("bot_id", ids).range(off, off + 999);
+    for (const r of data || []) tr[r.bot_id] = (tr[r.bot_id] || 0) + 1;
+    if (!data || data.length < 1000) break;
+  }
+  cmpData = { eq, tr };
+  $("cmpCard").classList.remove("hidden");
+  renderCompare();
+}
+function renderCompare() {
+  if (!cmpData) return;
+  const from = cmpDays ? isoAgo(cmpDays) : "0000";
+  const rows = bots.map((b, i) => {
+    const pts = (cmpData.eq[b.id] || []).filter(p => p.d >= from);
+    if (!pts.length) return { b, color: CMP_COLORS[i % CMP_COLORS.length], pts: [], ret: null, dd: null };
+    // 期間の最初の日の直前の資産（なければ元本）を基準にする
+    const all = cmpData.eq[b.id], k = all.indexOf(pts[0]), base = k > 0 ? all[k - 1].v : b.cfg.initialCash;
+    let peak = base, dd = 0;
+    for (const p of pts) { peak = Math.max(peak, p.v); dd = Math.max(dd, (peak - p.v) / peak * 100); }
+    return { b, color: CMP_COLORS[i % CMP_COLORS.length], pts: pts.map(p => ({ d: p.d, v: (p.v / base - 1) * 100 })), ret: (pts[pts.length - 1].v / base - 1) * 100, dd, days: pts.length };
+  });
+  $("cmpLegend").innerHTML = rows.map(r => `<span><i style="background:${r.color}"></i>${esc(r.b.name)}</span>`).join("");
+  drawChart($("cmpChart"), rows.filter(r => r.pts.length).map(r => ({ pts: r.pts, color: r.color, width: 1.8, tipColor: "#fff" })), { m: "US", fmt: v => pct(v) });
+  const sorted = rows.slice().sort((a, b) => (b.ret ?? -1e9) - (a.ret ?? -1e9));
+  $("cmpTable").innerHTML = `<tr><th>ボット</th><th>損益</th><th>最大下落</th><th>取引</th></tr>` + sorted.map(r => `<tr class="r" data-id="${r.b.id}" style="cursor:pointer">
+    <td style="font-family:inherit;white-space:normal"><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${r.color};margin-right:6px"></i>${esc(r.b.name)}${r.b.active ? "" : `<span class="mu" style="font-size:11px">（停止）</span>`}</td>
+    <td class="${cls(r.ret)}">${r.ret == null ? "—" : pct(r.ret, 2)}</td><td>${r.dd == null ? "—" : "-" + r.dd.toFixed(1) + "%"}</td><td>${cmpData.tr[r.b.id] || 0}回</td></tr>`).join("");
+  $("cmpTable").querySelectorAll("tr.r").forEach(tr => tr.onclick = () => openBot(tr.dataset.id));
+}
+segInit("cmpRange", v => { cmpDays = Number(v); renderCompare(); });
 
 let currentBot = null;
 async function openBot(id) {
