@@ -212,16 +212,24 @@ function withRegime(market: Market, cfgIn: any) {
     if (!cfg.regime.volSym) cfg.regime.volSym = market === "US" ? "VIX" : "NKVI";
     cfg.regime.volLag = market === "JP" && cfg.regime.volSym === "VIX"; // 米国の終値は日本の引け後に出るので前日までで判定
   }
+  if ((STRATEGIES as any)[cfg.strategy]?.needsVol) {
+    if (!cfg.fearSym) cfg.fearSym = market === "US" ? "VIX" : "NKVI";
+    cfg.fearLag = market === "JP" && cfg.fearSym === "VIX";
+  }
   return cfg;
 }
 const regimeSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" && cfg.regime.rule !== "vol" ? cfg.regime.symbol : null;
-const volSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" && cfg.regime.rule !== "ma" && cfg.regime.volSym ? cfg.regime.volSym : null;
+// 必要な恐怖指数（相場フィルター用と、恐怖指数を使う戦略用）
+const volSymbols = (cfg: any): string[] => [...new Set([
+  ...(cfg.regime?.mode === "auto" && cfg.regime.rule !== "ma" && cfg.regime.volSym ? [cfg.regime.volSym] : []),
+  ...((STRATEGIES as any)[cfg.strategy]?.needsVol && cfg.fearSym ? [cfg.fearSym] : []),
+])];
 // 恐怖指数のデータを data["IX:VIX"] のような名前で足す
 async function addVol(cfg: any, data: Record<string, Bar[]>, from: string | null, errors?: string[]) {
-  const vs = volSymbol(cfg);
-  if (!vs) return;
-  try { await ensure("IX", vs); data["IX:" + vs] = await loadBars("IX", vs, from); if (!data["IX:" + vs].length) throw new Error("データがありません"); }
-  catch (e) { const msg = `恐怖指数 ${vs}: ${e instanceof Error ? e.message : e}`; if (errors) errors.push(msg); else throw new HttpError(400, msg); }
+  for (const vs of volSymbols(cfg)) {
+    try { await ensure("IX", vs); data["IX:" + vs] = await loadBars("IX", vs, from); if (!data["IX:" + vs].length) throw new Error("データがありません"); }
+    catch (e) { const msg = `恐怖指数 ${vs}: ${e instanceof Error ? e.message : e}`; if (errors) errors.push(msg); else throw new HttpError(400, msg); }
+  }
 }
 
 async function createBot(userId: string, body: any) {
@@ -276,7 +284,7 @@ async function notify(userId: string, msg: { title: string; body: string; tag?: 
 const fmtNum = (v: number, m: string) => m === "US" ? v.toFixed(2) : Math.round(v).toLocaleString("ja-JP");
 function runSummary(bot: any, r: any): string | null {
   const lines: string[] = [];
-  for (const t of r.trades.slice(-4)) lines.push(`${t.side === "buy" ? "買" : "売"} ${t.symbol} ${t.qty}株 @${fmtNum(t.price, bot.market)}${t.pnl != null ? `（${t.pnl >= 0 ? "+" : ""}${fmtNum(t.pnl, bot.market)}）` : ""}`);
+  for (const t of r.trades.slice(-4)) lines.push(`${/空売り/.test(t.reason ?? "") ? "空売り" : t.side === "buy" ? "買" : "売"} ${t.symbol} ${t.qty}株 @${fmtNum(t.price, bot.market)}${t.pnl != null ? `（${t.pnl >= 0 ? "+" : ""}${fmtNum(t.pnl, bot.market)}）` : ""}`);
   if (r.trades.length > 4) lines.unshift(`約定${r.trades.length}件（最新4件）`);
   const fresh = (r.state.pending ?? []).filter((o: any) => o.signalDate === r.state.lastDate);
   for (const o of fresh.slice(0, 3)) lines.push(`次の営業日に${o.side === "buy" ? "買い" : "売り"}：${o.symbol}（${o.reason}）`);
@@ -286,7 +294,7 @@ function runSummary(bot: any, r: any): string | null {
 }
 
 async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
-  const cfg = normalizeCfg(bot.cfg);
+  const cfg = withRegime(bot.market, bot.cfg);
   let data = preloaded;
   const errors: string[] = [];
   if (!data) {
@@ -429,7 +437,7 @@ Deno.serve(async (req) => {
               const { data: p } = await db.from("st_prices").select("c").eq("market", bot.market).eq("symbol", s).lte("d", latest).order("d", { ascending: false }).limit(1).maybeSingle();
               if (p?.c) state.lastClose[s] = p.c;
             }
-            state.prevEquity = state.cash + Object.entries(state.positions ?? {}).reduce((a, [s, p]: [string, any]) => a + p.qty * (state.lastClose[s] ?? p.avg), 0);
+            state.prevEquity = state.cash + Object.entries(state.positions ?? {}).reduce((a, [s, p]: [string, any]) => { const c = state.lastClose[s] ?? p.avg; return a + (p.short ? p.qty * (p.avg - c) : p.qty * c); }, 0);
           }
           state.halted = false; state.haltReason = null; state.peak = state.prevEquity;
         }

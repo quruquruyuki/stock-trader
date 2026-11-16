@@ -184,6 +184,10 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <p class="hint" id="btDesc"></p>
         </div>
         <div class="row grid3" id="btParams"></div>
+        <div class="row hidden" id="btFearBox">
+          <label class="lab" for="btFearSym">見る恐怖指数</label>
+          <select id="btFearSym" class="in"><option value="NKVI">日経平均VI</option><option value="VIX">VIX（米国）</option></select>
+        </div>
         <div class="row">
           <label class="lab" for="btRgMode">相場フィルター（市況で売買を切り替える）</label>
           <select id="btRgMode" class="in"><option value="off">使わない</option><option value="auto">指数で自動判定する</option></select>
@@ -218,6 +222,11 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
               <div><label class="lab" for="btSl">損切り（%・0でなし）</label><input id="btSl" class="in num" inputmode="decimal" value="0"></div>
               <div><label class="lab" for="btTp">利確（%・0でなし）</label><input id="btTp" class="in num" inputmode="decimal" value="0"></div>
             </div>
+            <div class="row grid2">
+              <div><label class="lab" for="btSide">売買の向き</label><select id="btSide" class="in"><option value="long">買い（通常）</option><option value="short">空売り（下がると利益）</option></select></div>
+              <div><label class="lab" for="btBorrow">貸株料など（年率%）</label><input id="btBorrow" class="in num" inputmode="decimal" value="1"></div>
+            </div>
+            <p class="hint" style="margin:-6px 0 14px">空売りは、シグナルが出たら売りで入り、消えたら買い戻します。相場フィルターを使うと「弱気のときだけ仕掛ける」になります。逆日歩や売り禁などは計算に入っていません。</p>
             <div class="row">
               <label class="lab" for="btTrend">トレンド条件：終値が何日線より上のときだけ持つ（0でなし）</label>
               <input id="btTrend" class="in num" inputmode="numeric" value="0" placeholder="例：200">

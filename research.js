@@ -11,7 +11,7 @@ export function backtest(cfgIn, data, opts = {}) {
   };
   const o = { applyHalts: false, toDate: opts.to || null };
   const main = runDays(cfg, start(), data, o);
-  const bench = runDays({ ...cfg, strategy: "hold", params: {}, slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, regime: { mode: "off" } }, start(), data, o);
+  const bench = runDays({ ...cfg, strategy: "hold", params: {}, side: "long", slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, regime: { mode: "off" } }, start(), data, o);
   return { cfg, ...main, bearPct: main.equity.length ? main.bearDays / main.equity.length * 100 : 0, metrics: metrics(main.equity, main.trades, cfg.initialCash), bench: { equity: bench.equity, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
 }
 
@@ -30,7 +30,7 @@ export function metrics(equity, trades, initial) {
   }
   const mean = rets.reduce((a, b) => a + b, 0) / Math.max(1, rets.length);
   const sd = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rets.length - 1));
-  const sells = trades.filter(t => t.side === "sell");
+  const sells = trades.filter(t => t.pnl != null); // 手じまいした取引（売り、または空売りの買い戻し）
   const wins = sells.filter(t => t.pnl > 0).length;
   return {
     final,
@@ -58,6 +58,8 @@ export const GRIDS = {
   tma: { short: [5, 10, 20], mid: [25, 50, 75], long: [75, 100, 200] },
   dip: { down: [2, 3, 4, 5], exit: [3, 5, 10, 20] },
   tom: { from: [22, 24, 26, 28], to: [2, 3, 5] },
+  fear: { buy: [22, 25, 30, 35, 40], sell: [15, 18, 20, 25] },
+  fearpeak: { th: [25, 30, 35, 40], drop: [10, 20, 30], sell: [15, 18, 22] },
   hold: {},
 };
 function combos(grid) {
@@ -70,6 +72,8 @@ function validParams(strategy, p) {
   if (strategy === "rsi") return p.buy < p.sell;
   if (strategy === "macd") return p.fast < p.slow;
   if (strategy === "stoch") return p.buy < p.sell;
+  if (strategy === "fear") return p.sell < p.buy;
+  if (strategy === "fearpeak") return p.sell < p.th * 0.8;
   if (strategy === "tma") return p.short < p.mid && p.mid < p.long;
   return true;
 }

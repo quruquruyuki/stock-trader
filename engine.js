@@ -1,5 +1,5 @@
 // 売買エンジン（バックテストと模擬取引で共用。ブラウザと Supabase Edge Function の両方で動く）
-// 日足ベース：その日の終値でシグナルを判定し、翌営業日の始値で約定する。買いのみ（空売りなし）。
+// 日足ベース：その日の終値でシグナルを判定し、翌営業日の始値で約定する。通常は買い、side: "short" なら空売り。
 
 export const STRATEGIES = {
   sma: {
@@ -86,6 +86,25 @@ export const STRATEGIES = {
       { key: "to", label: "終了日（日）", def: 3, min: 1, max: 10 },
     ],
   },
+  fear: {
+    label: "恐怖指数の逆張り",
+    desc: "恐怖指数（VIX・日経VI）が「仕掛け」を超えたら持ち、「手じまい」を下回ったら手放す。みんなが怖がっているときに入る。",
+    needsVol: true,
+    params: [
+      { key: "buy", label: "仕掛け（超え）", def: 30, min: 10, max: 80 },
+      { key: "sell", label: "手じまい（未満）", def: 20, min: 8, max: 60 },
+    ],
+  },
+  fearpeak: {
+    label: "恐怖指数のピークアウト",
+    desc: "恐怖指数が直近20日の高値（「高値」以上）から「下落%」だけ下がったら持ち、「手じまい」を下回ったら手放す。落ち着き始めを待ってから入る。",
+    needsVol: true,
+    params: [
+      { key: "th", label: "高値（以上）", def: 30, min: 15, max: 80 },
+      { key: "drop", label: "下落（%）", def: 20, min: 5, max: 60 },
+      { key: "sell", label: "手じまい（未満）", def: 18, min: 8, max: 60 },
+    ],
+  },
   hold: {
     label: "買って持ち続ける",
     desc: "最初に買って、そのまま持ち続ける（比較用）。",
@@ -107,6 +126,10 @@ export const DEFAULT_CFG = {
   maxTradesPerDay: 4,  // 1日の約定回数の上限
   maxDailyLossPct: 5,  // 1日でこれ以上資産が減ったら停止（%）
   maxDrawdownPct: 20,  // 最高値からこれ以上資産が減ったら停止（%）
+  side: "long",        // long=買い / short=空売り（シグナルが出たら売りで入り、消えたら買い戻す）
+  borrowPct: 1,        // 空売りの貸株料など（年率%）
+  fearSym: "",         // 恐怖指数を使う戦略で見る指数（VIX / NKVI）
+  fearLag: false,      // 日本株で VIX を見るとき、前日までの値で判定する
   trendMa: 0,          // トレンド条件：終値がこの日数の移動平均より上のときだけ持つ（0=使わない）
   // 相場フィルター（市況）。mode: off=使わない / auto=指数で判定 / bull=強気で固定 / bear=弱気で固定
   // auto は「指数（symbol）の終値が ma 日移動平均以下」のとき弱気。action は弱気のときの動き:
@@ -141,6 +164,10 @@ export function normalizeCfg(c) {
     maxTradesPerDay: Math.round(num(cfg.maxTradesPerDay, 1, 100, 4)),
     maxDailyLossPct: num(cfg.maxDailyLossPct, 0, 100, 5),
     maxDrawdownPct: num(cfg.maxDrawdownPct, 0, 100, 20),
+    side: cfg.side === "short" ? "short" : "long",
+    borrowPct: num(cfg.borrowPct, 0, 20, 1),
+    fearSym: ["VIX", "NKVI"].includes(cfg.fearSym) ? cfg.fearSym : "",
+    fearLag: !!cfg.fearLag,
     trendMa: Math.round(num(cfg.trendMa, 0, 400, 0)),
     regime: {
       mode: ["auto", "bull", "bear"].includes(cfg.regime?.mode) ? cfg.regime.mode : "off",
@@ -191,16 +218,34 @@ function emaArr(a, n) {
 
 // 各日の「持ちたいか（1）／持ちたくないか（0）」。その日までのデータだけで判定する
 // cfg.trendMa があれば、終値がその移動平均より上のときだけ持つ
-export function signals(bars, strategy, p, trendMa = 0) {
-  const raw = rawSignals(bars, strategy, p);
+// vol = { bars, lag }：恐怖指数を使う戦略用
+export function signals(bars, strategy, p, trendMa = 0, vol = null) {
+  const raw = rawSignals(bars, strategy, p, vol);
   if (!trendMa) return raw;
   const t = smaArr(bars.map(b => b.c), trendMa);
   return raw.map((v, i) => v && t[i] != null && bars[i].c > t[i] ? 1 : 0);
 }
 
-function rawSignals(bars, strategy, p) {
+function rawSignals(bars, strategy, p, vol) {
   const n = bars.length, c = bars.map(b => b.c), out = new Array(n).fill(0);
   if (strategy === "hold") return out.fill(1);
+  if (strategy === "fear" || strategy === "fearpeak") {
+    const vb = vol?.bars;
+    if (!vb?.length) return out;
+    let ip = -1, pos = 0;
+    const recent = []; // 直近20個の恐怖指数
+    for (let i = 0; i < n; i++) {
+      const D = bars[i].d;
+      while (ip + 1 < vb.length && (vol.lag ? vb[ip + 1].d < D : vb[ip + 1].d <= D)) { ip++; recent.push(vb[ip].c); if (recent.length > 20) recent.shift(); }
+      if (ip >= 0) {
+        const v = vb[ip].c;
+        if (strategy === "fear") { if (!pos && v > p.buy) pos = 1; else if (pos && v < p.sell) pos = 0; }
+        else { const hi = Math.max(...recent); if (!pos && hi >= p.th && v <= hi * (1 - p.drop / 100) && v >= p.sell) pos = 1; else if (pos && v < p.sell) pos = 0; }
+      }
+      out[i] = pos;
+    }
+    return out;
+  }
   if (strategy === "boll") {
     const m = smaArr(c, p.period);
     let pos = 0;
@@ -297,7 +342,7 @@ export function initialState(cash) {
 const clone = o => JSON.parse(JSON.stringify(o));
 function equityOf(st) {
   let e = st.cash;
-  for (const [s, p] of Object.entries(st.positions)) e += p.qty * (st.lastClose[s] ?? p.avg);
+  for (const [s, p] of Object.entries(st.positions)) { const c = st.lastClose[s] ?? p.avg; e += p.short ? p.qty * (p.avg - c) : p.qty * c; }
   return e;
 }
 
@@ -311,7 +356,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   const idx = {}, sig = {};
   for (const s of syms) {
     idx[s] = new Map(data[s].map((b, i) => [b.d, i]));
-    sig[s] = signals(data[s], cfg.strategy, cfg.params, cfg.trendMa);
+    sig[s] = signals(data[s], cfg.strategy, cfg.params, cfg.trendMa, { bars: data["IX:" + cfg.fearSym], lag: cfg.fearLag });
   }
   const dates = [...new Set(syms.flatMap(s => data[s].map(b => b.d)))]
     .filter(d => (!st.lastDate || d > st.lastDate) && (!opts.toDate || d <= opts.toDate)).sort();
@@ -337,10 +382,38 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
     // 1) 前日に出した注文を、今日の始値で約定（売りを先に）
     let fills = 0;
     const keep = [];
-    const orders = [...st.pending].sort((a, b) => (a.side === "sell" ? 0 : 1) - (b.side === "sell" ? 0 : 1));
+    // 手じまい（売り・買い戻し）を先に。open が無い古い注文は、買い＝新規とみなす
+    const isOpen = o => o.open ?? o.side === "buy";
+    const orders = [...st.pending].sort((a, b) => (isOpen(a) ? 1 : 0) - (isOpen(b) ? 1 : 0));
     for (const o of orders) {
       const b = bar(o.symbol);
       if (!b || !(b.o > 0)) { keep.push(o); continue; }
+      if (!isOpen(o) && st.positions[o.symbol]?.short) {
+        // 空売りの買い戻し
+        if (fills >= cfg.maxTradesPerDay) { notes.push({ d: D, msg: `${o.symbol}：1日の取引回数の上限（${cfg.maxTradesPerDay}回）のため注文を取り消しました` }); continue; }
+        const p = st.positions[o.symbol], price = b.o * (1 + slip), f = p.qty * price * fee;
+        const borrow = p.qty * p.avg * cfg.borrowPct / 100 * Math.max(1, (Date.parse(D) - Date.parse(p.entry)) / 864e5) / 365;
+        const gain = p.qty * (p.avg - price) - f - borrow;
+        st.cash += gain;
+        trades.push({ d: D, symbol: o.symbol, side: "buy", qty: p.qty, price, fee: f + borrow, pnl: gain - (p.feeIn || 0), reason: o.reason });
+        delete st.positions[o.symbol];
+        fills++;
+        continue;
+      }
+      if (isOpen(o) && o.side === "sell") {
+        // 空売りで新規
+        if (st.positions[o.symbol]) continue;
+        if (fills >= cfg.maxTradesPerDay) { notes.push({ d: D, msg: `${o.symbol}：1日の取引回数の上限（${cfg.maxTradesPerDay}回）のため注文を取り消しました` }); continue; }
+        const price = b.o * (1 - slip), budget = Math.min(st.cash, equityOf(st) * posPct * (o.scale || 1));
+        const qty = Math.floor(budget / price / cfg.lot) * cfg.lot;
+        if (qty <= 0) { notes.push({ d: D, msg: `${o.symbol}：資金が足りず空売りできませんでした（${cfg.lot}株単位）` }); continue; }
+        const f = qty * price * fee;
+        st.cash -= f;
+        st.positions[o.symbol] = { qty, avg: price, cost: qty * price, entry: D, short: true, feeIn: f };
+        trades.push({ d: D, symbol: o.symbol, side: "sell", qty, price, fee: f, pnl: null, reason: o.reason });
+        fills++;
+        continue;
+      }
       if (fills >= cfg.maxTradesPerDay) { notes.push({ d: D, msg: `${o.symbol}：1日の取引回数の上限（${cfg.maxTradesPerDay}回）のため注文を取り消しました` }); continue; }
       if (o.side === "sell") {
         const p = st.positions[o.symbol];
@@ -392,21 +465,25 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
         const i = idx[s].get(D);
         if (i == null) continue;
         const want = sig[s][i], c = data[s][i].c, p = st.positions[s];
-        const has = side => st.pending.some(o => o.symbol === s && o.side === side);
+        const short = cfg.side === "short", rgOn = rg.mode !== "off";
+        const has = open => st.pending.some(o => o.symbol === s && isOpen(o) === open);
         if (p) {
+          // 損切り・利確は、空売りなら向きが逆（上がったら損切り、下がったら利確）
+          const move = (p.short ? p.avg - c : c - p.avg) / p.avg * 100;
           let reason = null;
-          if (cfg.slPct > 0 && c <= p.avg * (1 - cfg.slPct / 100)) reason = "損切り";
-          else if (cfg.tpPct > 0 && c >= p.avg * (1 + cfg.tpPct / 100)) reason = "利確";
-          else if (bear && rg.action === "exit") reason = "相場フィルター";
-          else if (!want) reason = "売りシグナル";
-          if (reason && !has("sell")) {
-            st.pending.push({ symbol: s, side: "sell", reason, signalDate: D });
-            if (reason === "損切り" || reason === "利確") st.blocked[s] = true; // 損切り・利確のあとは、シグナルが一度消えるまで買い直さない
+          if (cfg.slPct > 0 && move <= -cfg.slPct) reason = "損切り";
+          else if (cfg.tpPct > 0 && move >= cfg.tpPct) reason = "利確";
+          else if (rgOn && rg.action === "exit" && (p.short ? !bear : bear)) reason = "相場フィルター";
+          else if (!want) reason = p.short ? "買い戻しシグナル" : "売りシグナル";
+          if (reason && !has(false)) {
+            st.pending.push({ symbol: s, side: p.short ? "buy" : "sell", open: false, reason, signalDate: D });
+            if (reason === "損切り" || reason === "利確") st.blocked[s] = true; // 損切り・利確のあとは、シグナルが一度消えるまで入り直さない
           }
         } else {
           if (st.blocked[s] && !want) delete st.blocked[s];
-          const stopBuy = bear && rg.action !== "half";
-          if (want && !stopBuy && !st.blocked[s] && !has("buy")) st.pending.push({ symbol: s, side: "buy", reason: "買いシグナル", signalDate: D, ...(bear ? { scale: 0.5 } : {}) });
+          // 買いは「弱気なら控える」、空売りは「弱気のときだけ仕掛ける」
+          const stop = short ? (rgOn && !bear) : (bear && rg.action !== "half");
+          if (want && !stop && !st.blocked[s] && !has(true)) st.pending.push({ symbol: s, side: short ? "sell" : "buy", open: true, reason: short ? "空売りシグナル" : "買いシグナル", signalDate: D, ...(bear && !short ? { scale: 0.5 } : {}) });
         }
       }
     }

@@ -136,6 +136,7 @@ function setMarket(m) {
   $("btCashLab").textContent = m === "JP" ? "初期資金（円）" : "初期資金（ドル）";
   $("btRgSym").value = m === "JP" ? "1306" : "SPY";
   $("btRgVolSym").value = m === "JP" ? "NKVI" : "VIX";
+  $("btFearSym").value = m === "JP" ? "NKVI" : "VIX";
   $("btRgVolTh").value = m === "JP" ? "30" : "25";
   $("btRgHint").textContent = `指数の終値が移動平均以下の日を「弱気」とみなします。初期値は${m === "JP" ? "TOPIX連動ETF（1306）" : "S&P500 ETF（SPY）"}の200日線です。`;
   $("btCash").value = m === "JP" ? "1000000" : "10000";
@@ -149,6 +150,7 @@ function renderParams() {
   $("btParams").innerHTML = st.params.map(p => `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="${p.step ? "decimal" : "numeric"}" value="${p.def}"></div>`).join("");
   $("swCard") && $("swCard").classList.toggle("hidden", !Object.keys(GRIDS[$("btStrategy").value] || {}).length);
   $("btParams").classList.toggle("hidden", !st.params.length);
+  $("btFearBox").classList.toggle("hidden", !st.needsVol);
 }
 function readCfg() {
   const strategy = $("btStrategy").value, params = {};
@@ -158,6 +160,8 @@ function readCfg() {
     strategy, params, symbols: parseSyms($("btSymbols").value),
     initialCash: n("btCash"), lot: n("btLot"), slPct: n("btSl"), tpPct: n("btTp"),
     feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
+    side: $("btSide").value, borrowPct: n("btBorrow"),
+    fearSym: STRATEGIES[strategy].needsVol ? $("btFearSym").value : "", fearLag: market === "JP" && $("btFearSym").value === "VIX",
     regime: { mode: $("btRgMode").value, symbol: $("btRgSym").value, ma: n("btRgMa"), action: $("btRgAct").value,
       rule: $("btRgRule").value, volSym: $("btRgVolSym").value, volTh: n("btRgVolTh"), volLag: market === "JP" && $("btRgVolSym").value === "VIX" },
   });
@@ -184,6 +188,7 @@ $("btRun").onclick = async () => {
   if (cfg.strategy === "sma" && cfg.params.short >= cfg.params.long) { $("btErr").textContent = "移動平均は「短期」を「長期」より小さくしてください"; return; }
   if (cfg.strategy === "macd" && cfg.params.fast >= cfg.params.slow) { $("btErr").textContent = "MACDは「短期EMA」を「長期EMA」より小さくしてください"; return; }
   if (cfg.strategy === "tma" && !(cfg.params.short < cfg.params.mid && cfg.params.mid < cfg.params.long)) { $("btErr").textContent = "移動平均は 短期＜中期＜長期 の順にしてください"; return; }
+  if (cfg.strategy === "fear" && cfg.params.sell >= cfg.params.buy) { $("btErr").textContent = "「手じまい」は「仕掛け」より小さくしてください"; return; }
   if (cfg.strategy === "stoch" && cfg.params.buy >= cfg.params.sell) { $("btErr").textContent = "「買い」は「売り」より小さくしてください"; return; }
   const rgSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "vol" ? (cfg.regime.symbol || (market === "JP" ? "1306" : "SPY")) : null;
   const volSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "ma" ? cfg.regime.volSym : null;
@@ -194,10 +199,10 @@ $("btRun").onclick = async () => {
     const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null; // シグナルの助走分も取る
     const { data, errors } = await getBars(market, [...new Set([...cfg.symbols, ...(rgSym ? [rgSym] : [])])], from);
     if (rgSym && !data[rgSym]?.length) throw new Error(`相場フィルターの指数 ${rgSym} の株価が取得できませんでした${errors[rgSym] ? "：" + errors[rgSym] : ""}`);
-    if (volSym) {
-      const v = await getBars("IX", [volSym], from);
-      if (!v.data[volSym]?.length) throw new Error(`恐怖指数 ${VOL_NAME[volSym]} が取得できませんでした${v.errors[volSym] ? "：" + v.errors[volSym] : ""}`);
-      data["IX:" + volSym] = v.data[volSym];
+    for (const vs of [...new Set([volSym, cfg.fearSym].filter(Boolean))]) {
+      const v = await getBars("IX", [vs], from);
+      if (!v.data[vs]?.length) throw new Error(`恐怖指数 ${VOL_NAME[vs]} が取得できませんでした${v.errors[vs] ? "：" + v.errors[vs] : ""}`);
+      data["IX:" + vs] = v.data[vs];
     }
     const ok = cfg.symbols.filter(s => data[s]?.length);
     const errText = Object.entries(errors).map(([s, e]) => `${s}：${e}`).join("\n");
@@ -261,7 +266,7 @@ function tradeTable(trades, m) {
 
 const paramText = cfg => {
   const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
-  return `${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
+  return `${cfg.side === "short" ? "【空売り】" : ""}${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${cfg.fearSym ? "・" + VOL_NAME[cfg.fearSym] : ""}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
 };
 const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
 const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
@@ -433,7 +438,7 @@ async function loadNames(m, syms) {
   const { data } = await sb.from("st_symbols").select("symbol,name").eq("market", m).in("symbol", missing);
   for (const r of data || []) if (r.name) names[`${m}:${r.symbol}`] = r.name;
 }
-const botEquity = b => { const s = b.state; let e = s.cash; for (const [k, p] of Object.entries(s.positions || {})) e += p.qty * (s.lastClose?.[k] ?? p.avg); return e; };
+const botEquity = b => { const s = b.state; let e = s.cash; for (const [k, p] of Object.entries(s.positions || {})) { const c = s.lastClose?.[k] ?? p.avg; e += p.short ? p.qty * (p.avg - c) : p.qty * c; } return e; };
 const badge = b => b.active ? `<span class="badge on">● 稼働中</span>` : b.halted_reason ? `<span class="badge halt">安全装置で停止</span>` : `<span class="badge off">停止中</span>`;
 
 async function loadBots() {
@@ -543,12 +548,12 @@ async function openBot(id) {
     </div>
     <div class="card"><h2>保有株</h2>
       ${pos.length ? `<div class="tscroll"><table class="t"><tr><th>銘柄</th><th>株数</th><th>取得値</th><th>終値</th><th>評価損益</th></tr>${pos.map(([s, p]) => {
-        const c = st.lastClose?.[s] ?? p.avg, u = (c - p.avg) * p.qty;
-        return `<tr><td>${esc(symLabel(m, s))}</td><td>${p.qty.toLocaleString()}</td><td>${price(p.avg, m)}</td><td>${price(c, m)}</td><td class="${cls(u)}">${money(u, m)}<br><span style="font-size:11px">${pct((c / p.avg - 1) * 100)}</span></td></tr>`;
+        const c = st.lastClose?.[s] ?? p.avg, u = (p.short ? p.avg - c : c - p.avg) * p.qty;
+        return `<tr><td>${esc(symLabel(m, s))}${p.short ? `<span class="mu" style="font-size:11px">（空売り）</span>` : ""}</td><td>${p.qty.toLocaleString()}</td><td>${price(p.avg, m)}</td><td>${price(c, m)}</td><td class="${cls(u)}">${money(u, m)}<br><span style="font-size:11px">${pct((p.short ? 1 - c / p.avg : c / p.avg - 1) * 100)}</span></td></tr>`;
       }).join("")}</table></div>` : `<div class="empty">持っている株はありません</div>`}
     </div>
     <div class="card"><h2>次の営業日の注文</h2>
-      ${(st.pending || []).length ? `<table class="t"><tr><th>銘柄</th><th>売買</th><th>理由</th></tr>${st.pending.map(o => `<tr><td>${esc(symLabel(m, o.symbol))}</td><td class="side-${o.side}">${o.side === "buy" ? "買い" : "売り"}</td><td style="font-family:inherit">${esc(o.reason)}</td></tr>`).join("")}</table><p class="hint">始値で約定する想定です（模擬）。</p>` : `<div class="empty">注文はありません</div>`}
+      ${(st.pending || []).length ? `<table class="t"><tr><th>銘柄</th><th>売買</th><th>理由</th></tr>${st.pending.map(o => `<tr><td>${esc(symLabel(m, o.symbol))}</td><td class="side-${o.side}">${/空売り/.test(o.reason) ? "空売り" : /買い戻し/.test(o.reason) || (o.side === "buy" && o.open === false) ? "買い戻し" : o.side === "buy" ? "買い" : "売り"}</td><td style="font-family:inherit">${esc(o.reason)}</td></tr>`).join("")}</table><p class="hint">始値で約定する想定です（模擬）。</p>` : `<div class="empty">注文はありません</div>`}
     </div>
     <div class="card"><h2>取引履歴</h2><div class="tscroll"><table class="t">${tradeTable(trRes.data || [], m)}</table></div></div>
     <div class="card"><h2>相場感（市況）</h2>
