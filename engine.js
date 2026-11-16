@@ -111,7 +111,9 @@ export const DEFAULT_CFG = {
   // 相場フィルター（市況）。mode: off=使わない / auto=指数で判定 / bull=強気で固定 / bear=弱気で固定
   // auto は「指数（symbol）の終値が ma 日移動平均以下」のとき弱気。action は弱気のときの動き:
   //   nobuy=新しく買わない / exit=持ち株も売って待つ / half=買う量を半分にする
-  regime: { mode: "off", symbol: "", ma: 200, action: "nobuy" },
+  // rule は弱気の判定方法: ma=指数の移動平均 / vol=恐怖指数（volSym が volTh を超えたら弱気）/ either=どちらかが弱気なら弱気
+  // volSym: VIX（米国）/ NKVI（日経平均VI）。volLag: 日本株で VIX を使うとき、前日までの値で判定する
+  regime: { mode: "off", symbol: "", ma: 200, action: "nobuy", rule: "ma", volSym: "", volTh: 25, volLag: false },
 };
 
 export function normalizeCfg(c) {
@@ -145,6 +147,10 @@ export function normalizeCfg(c) {
       symbol: String(cfg.regime?.symbol ?? "").trim().toUpperCase().slice(0, 10),
       ma: Math.round(num(cfg.regime?.ma, 5, 400, 200)),
       action: ["exit", "half"].includes(cfg.regime?.action) ? cfg.regime.action : "nobuy",
+      rule: ["vol", "either"].includes(cfg.regime?.rule) ? cfg.regime.rule : "ma",
+      volSym: ["VIX", "NKVI"].includes(cfg.regime?.volSym) ? cfg.regime.volSym : "",
+      volTh: num(cfg.regime?.volTh, 5, 100, 25),
+      volLag: !!cfg.regime?.volLag,
     },
   };
 }
@@ -312,10 +318,14 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   // 相場フィルター：その日が「弱気」かどうか
   const rg = cfg.regime;
   let bearOn = () => rg.mode === "bear";
-  if (rg.mode === "auto" && data[rg.symbol]?.length) {
-    const ib = data[rg.symbol], ima = smaArr(ib.map(b => b.c), rg.ma);
-    let ip = -1;
-    bearOn = D => { while (ip + 1 < ib.length && ib[ip + 1].d <= D) ip++; return ip >= 0 && ima[ip] != null && ib[ip].c <= ima[ip]; };
+  if (rg.mode === "auto") {
+    // その日までに分かっている最後の値で判定する（strict なら前日まで）
+    const lookup = (bars, test, strict) => { let ip = -1; return D => { while (ip + 1 < bars.length && (strict ? bars[ip + 1].d < D : bars[ip + 1].d <= D)) ip++; return ip >= 0 && test(ip); }; };
+    let maBear = () => false, volBear = () => false;
+    const ib = data[rg.symbol], vb = data["IX:" + rg.volSym];
+    if (rg.rule !== "vol" && ib?.length) { const ima = smaArr(ib.map(b => b.c), rg.ma); maBear = lookup(ib, i => ima[i] != null && ib[i].c <= ima[i], false); }
+    if (rg.rule !== "ma" && vb?.length) volBear = lookup(vb, i => vb[i].c > rg.volTh, rg.volLag);
+    bearOn = D => { const a = maBear(D), b = volBear(D); return a || b; };
   }
   let bearDays = 0;
   const slip = cfg.slipPct / 100, fee = cfg.feePct / 100;

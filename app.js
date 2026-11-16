@@ -135,6 +135,8 @@ function setMarket(m) {
   $("btSymHint").textContent = m === "JP" ? "4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）" : "ティッカー（例：AAPL アップル、MSFT マイクロソフト、SPY S&P500 ETF）";
   $("btCashLab").textContent = m === "JP" ? "初期資金（円）" : "初期資金（ドル）";
   $("btRgSym").value = m === "JP" ? "1306" : "SPY";
+  $("btRgVolSym").value = m === "JP" ? "NKVI" : "VIX";
+  $("btRgVolTh").value = m === "JP" ? "30" : "25";
   $("btRgHint").textContent = `指数の終値が移動平均以下の日を「弱気」とみなします。初期値は${m === "JP" ? "TOPIX連動ETF（1306）" : "S&P500 ETF（SPY）"}の200日線です。`;
   $("btCash").value = m === "JP" ? "1000000" : "10000";
   $("btLot").innerHTML = m === "JP"
@@ -156,7 +158,8 @@ function readCfg() {
     strategy, params, symbols: parseSyms($("btSymbols").value),
     initialCash: n("btCash"), lot: n("btLot"), slPct: n("btSl"), tpPct: n("btTp"),
     feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
-    regime: { mode: $("btRgMode").value, symbol: $("btRgSym").value, ma: n("btRgMa"), action: $("btRgAct").value },
+    regime: { mode: $("btRgMode").value, symbol: $("btRgSym").value, ma: n("btRgMa"), action: $("btRgAct").value,
+      rule: $("btRgRule").value, volSym: $("btRgVolSym").value, volTh: n("btRgVolTh"), volLag: market === "JP" && $("btRgVolSym").value === "VIX" },
   });
 }
 const isoAgo = days => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); };
@@ -182,7 +185,8 @@ $("btRun").onclick = async () => {
   if (cfg.strategy === "macd" && cfg.params.fast >= cfg.params.slow) { $("btErr").textContent = "MACDは「短期EMA」を「長期EMA」より小さくしてください"; return; }
   if (cfg.strategy === "tma" && !(cfg.params.short < cfg.params.mid && cfg.params.mid < cfg.params.long)) { $("btErr").textContent = "移動平均は 短期＜中期＜長期 の順にしてください"; return; }
   if (cfg.strategy === "stoch" && cfg.params.buy >= cfg.params.sell) { $("btErr").textContent = "「買い」は「売り」より小さくしてください"; return; }
-  const rgSym = cfg.regime.mode === "auto" ? (cfg.regime.symbol || (market === "JP" ? "1306" : "SPY")) : null;
+  const rgSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "vol" ? (cfg.regime.symbol || (market === "JP" ? "1306" : "SPY")) : null;
+  const volSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "ma" ? cfg.regime.volSym : null;
   if (rgSym) cfg.regime.symbol = rgSym;
   busy($("btRun"), true, "株価を取得して計算中…");
   try {
@@ -190,6 +194,11 @@ $("btRun").onclick = async () => {
     const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null; // シグナルの助走分も取る
     const { data, errors } = await getBars(market, [...new Set([...cfg.symbols, ...(rgSym ? [rgSym] : [])])], from);
     if (rgSym && !data[rgSym]?.length) throw new Error(`相場フィルターの指数 ${rgSym} の株価が取得できませんでした${errors[rgSym] ? "：" + errors[rgSym] : ""}`);
+    if (volSym) {
+      const v = await getBars("IX", [volSym], from);
+      if (!v.data[volSym]?.length) throw new Error(`恐怖指数 ${VOL_NAME[volSym]} が取得できませんでした${v.errors[volSym] ? "：" + v.errors[volSym] : ""}`);
+      data["IX:" + volSym] = v.data[volSym];
+    }
     const ok = cfg.symbols.filter(s => data[s]?.length);
     const errText = Object.entries(errors).map(([s, e]) => `${s}：${e}`).join("\n");
     if (!ok.length) throw new Error(errText || "株価が取得できませんでした");
@@ -254,6 +263,7 @@ const paramText = cfg => {
   const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
   return `${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
 };
+const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
 const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
 const regimeText = cfg => {
   const r = cfg.regime || { mode: "off" };
@@ -261,7 +271,8 @@ const regimeText = cfg => {
   const act = `弱気のとき：${RG_ACT[r.action] || RG_ACT.nobuy}`;
   if (r.mode === "bull") return "強気で固定";
   if (r.mode === "bear") return `弱気で固定／${act}`;
-  return `${r.symbol} が${r.ma}日線以下なら弱気／${act}`;
+  const ma = `${r.symbol} が${r.ma}日線以下`, vol = `${VOL_NAME[r.volSym] || r.volSym} が${r.volTh}超${r.volLag ? "（前日まで）" : ""}`;
+  return `${r.rule === "vol" ? vol : r.rule === "either" ? `${ma}、または${vol}` : ma}なら弱気／${act}`;
 };
 const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
 
@@ -536,6 +547,42 @@ async function openBot(id) {
 }
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).classList.add("hidden"));
 
+/* ---------- 市況 ---------- */
+// 目安の水準：[平常の上限, 警戒の上限]
+const VOL_LEVEL = { VIX: [20, 30], NKVI: [25, 35] };
+const VOL_DESC = { VIX: "米国株（S&P500）の今後1か月の値動きの見込み。20未満は平常、30超は強い警戒。", NKVI: "日経平均の今後1か月の値動きの見込み。ふだんは20〜30あたり、30を大きく超えると荒れ模様。" };
+async function loadMarket() {
+  const from = isoAgo(420), out = [];
+  const [ix, us, jp] = await Promise.allSettled([getBars("IX", ["NKVI", "VIX"], from), getBars("US", ["SPY"], isoAgo(700)), getBars("JP", ["1306"], isoAgo(700))]);
+  const charts = [];
+  if (ix.status === "fulfilled") {
+    for (const s of ["NKVI", "VIX"]) {
+      const b = ix.value.data[s];
+      if (!b?.length) { out.push(`<div class="card"><h2>${VOL_NAME[s]}</h2><div class="err">${esc(ix.value.errors[s] || "取得できませんでした")}</div></div>`); continue; }
+      const last = b[b.length - 1], prev = b[b.length - 2] || last, [lo, hi] = VOL_LEVEL[s], ch = last.c - prev.c;
+      const lv = last.c < lo ? ["calm", "平常"] : last.c < hi ? ["warn", "警戒"] : ["hot", "強い警戒"];
+      const yr = b.slice(-250).map(x => x.c), rank = yr.filter(x => x <= last.c).length / yr.length * 100;
+      out.push(`<div class="card"><h2>${VOL_NAME[s]} <span class="mu num" style="font-size:12px;font-weight:400">${fmtD(last.d)}</span></h2>
+        <div class="mk"><div><span class="big">${last.c.toFixed(2)}</span> <span class="num ${ch > 0 ? "dn" : "up"}" style="font-size:13px">${ch >= 0 ? "+" : ""}${ch.toFixed(2)}</span></div><span class="lv ${lv[0]}">${lv[1]}</span></div>
+        <p class="hint" style="margin:0 0 6px">${VOL_DESC[s]} この1年では下から <b class="num">${rank.toFixed(0)}%</b> の位置。</p>
+        <div class="chartwrap"><svg class="chart" id="mk_${s}"></svg></div></div>`);
+      charts.push(() => drawChart($("mk_" + s), [{ pts: b.slice(-250).map(x => ({ d: x.d, v: x.c })), color: "#15181c", width: 1.6 }], { m: "US", fmt: v => v.toFixed(2) }));
+    }
+  } else out.push(`<div class="card"><h2>恐怖指数</h2><div class="err">${esc(ix.reason?.message || "取得できませんでした")}</div></div>`);
+  const trend = (res, sym, label) => {
+    const b = res.status === "fulfilled" ? res.value.data[sym] : null;
+    if (!b?.length) return `<div class="keyrow"><span>${label}</span><span class="mu">取得できません</span></div>`;
+    const n = b.length >= 200 ? 200 : b.length >= 100 ? 100 : 0;
+    if (!n) return `<div class="keyrow"><span>${label}</span><span class="mu">データ不足</span></div>`;
+    const ma = b.slice(-n).reduce((a, x) => a + x.c, 0) / n, last = b[b.length - 1], diff = (last.c / ma - 1) * 100;
+    return `<div class="keyrow"><span>${label}<br><span class="mu" style="font-size:12px">${n}日線との差 <span class="num">${pct(diff)}</span>・${fmtD(last.d)}</span></span><span class="${diff > 0 ? "ok" : "ng"}">${diff > 0 ? "強気" : "弱気"}</span></div>`;
+  };
+  out.push(`<div class="card"><h2>指数のトレンド</h2>${trend(jp, "1306", "日本株（TOPIX連動ETF 1306）")}${trend(us, "SPY", "米国株（S&P500 ETF SPY）")}
+    <p class="hint">相場フィルターの「指数の移動平均」と同じ見方です。日本株は無料プランのため約12週間遅れのデータです。</p></div>`);
+  $("mktBody").innerHTML = out.join("");
+  charts.forEach(f => f());
+}
+
 /* ---------- 設定 ---------- */
 async function loadStatus() {
   try {
@@ -548,9 +595,10 @@ async function loadStatus() {
 
 /* ---------- 画面切り替え ---------- */
 function switchView(v) {
-  ["vBT", "vPaper", "vSet"].forEach(x => $(x).classList.toggle("hidden", x !== v));
+  ["vBT", "vPaper", "vMkt", "vSet"].forEach(x => $(x).classList.toggle("hidden", x !== v));
   [...$("tabs").children].forEach(b => b.classList.toggle("on", b.dataset.v === v));
   if (v === "vPaper") loadBots();
+  if (v === "vMkt") loadMarket();
   if (v === "vSet") { loadStatus(); pushRefresh().catch(() => {}); }
   window.scrollTo(0, 0);
 }
@@ -581,6 +629,8 @@ sb.auth.onAuthStateChange((_ev, session) => {
 $("btStrategy").innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
 $("btStrategy").onchange = renderParams;
 $("btRgMode").onchange = () => $("btRgBox").classList.toggle("hidden", $("btRgMode").value !== "auto");
+$("btRgRule").onchange = () => { const r = $("btRgRule").value; $("btRgMaBox").classList.toggle("hidden", r === "vol"); $("btRgVolBox").classList.toggle("hidden", r === "ma"); };
+$("btRgVolSym").onchange = () => { $("btRgVolTh").value = $("btRgVolSym").value === "NKVI" ? "30" : "25"; };
 segInit("btMarket", setMarket);
 segInit("btPeriod", v => period = Number(v));
 setMarket("JP");

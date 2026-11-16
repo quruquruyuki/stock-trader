@@ -1,5 +1,5 @@
 // 株ラボ（stock-trader）の Edge Function
-// ・株価の取得と保存（日本株: J-Quants API、米国株: Tiingo）
+// ・株価の取得と保存（日本株: J-Quants API、米国株: Tiingo、恐怖指数: Cboe の VIX・日経平均VI）
 // ・模擬取引ボットの作成・実行・停止（実際の注文は一切出さない）
 //
 // 使う Secrets:
@@ -40,7 +40,7 @@ const json = (body: unknown, status = 200) =>
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 type Bar = { d: string; o: number; h: number; l: number; c: number; v: number };
-type Market = "JP" | "US";
+type Market = "JP" | "US" | "IX"; // IX = 恐怖指数（VIX, NKVI）
 const REFRESH_MS = 3 * 60 * 60 * 1000; // 3時間以内に取得済みなら取り直さない
 
 /* ---------- 株価の取得 ---------- */
@@ -101,8 +101,46 @@ async function fetchUS(ticker: string, from: string | null): Promise<{ bars: Bar
   return { bars, name };
 }
 
+// 恐怖指数。VIX は Cboe の公開CSV（だめなら FRED）、日経平均VI は日経平均プロフィルの公開CSV
+const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI" };
+async function getText(url: string, enc = "utf-8") {
+  const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (stock-trader; personal use)" } });
+  if (!r.ok) throw new HttpError(502, `${new URL(url).hostname}（${r.status}）`);
+  return new TextDecoder(enc).decode(await r.arrayBuffer());
+}
+async function fetchIX(symbol: string, from: string | null): Promise<{ bars: Bar[]; name: string | null }> {
+  const bars: Bar[] = [];
+  const num = (x: string) => { const n = Number(String(x ?? "").replace(/["\s]/g, "")); return Number.isFinite(n) && n > 0 ? n : null; };
+  if (symbol === "VIX") {
+    try {
+      for (const line of (await getText("https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv")).split(/\r?\n/)) {
+        const p = line.split(","), m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((p[0] ?? "").trim());
+        const c = num(p[4]);
+        if (m && c) bars.push({ d: `${m[3]}-${m[1]}-${m[2]}`, o: num(p[1]) ?? c, h: num(p[2]) ?? c, l: num(p[3]) ?? c, c, v: 0 });
+      }
+      if (!bars.length) throw new Error("empty");
+    } catch (_) {
+      bars.length = 0;
+      for (const line of (await getText("https://fred.stlouisfed.org/graph/fredgraph.csv?id=VIXCLS")).split(/\r?\n/)) {
+        const p = line.split(","), c = num(p[1]);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(p[0] ?? "") && c) bars.push({ d: p[0], o: c, h: c, l: c, c, v: 0 });
+      }
+    }
+  } else {
+    // 列: データ日付, 終値, 始値, 高値, 安値（Shift_JIS）
+    for (const line of (await getText("https://indexes.nikkei.co.jp/nkave/historical/nikkei_stock_average_vi_daily_jp.csv", "shift_jis")).split(/\r?\n/)) {
+      const p = line.split(",").map(x => x.replace(/"/g, "").trim()), m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(p[0] ?? "");
+      const c = num(p[1]);
+      if (m && c) bars.push({ d: `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`, o: num(p[2]) ?? c, h: num(p[3]) ?? c, l: num(p[4]) ?? c, c, v: 0 });
+    }
+  }
+  bars.sort((a, b) => a.d < b.d ? -1 : 1);
+  return { bars: from ? bars.filter(b => b.d >= from) : bars, name: IX_NAMES[symbol] };
+}
+
 function cleanSymbol(market: Market, s: string) {
   const v = String(s).trim().toUpperCase();
+  if (market === "IX") { if (!IX_NAMES[v]) throw new HttpError(400, `恐怖指数は VIX か NKVI を指定してください: ${s}`); return v; }
   if (market === "JP") { if (!/^\d{4}[0-9A-Z]?$|^\d{3}[A-Z]\d?$/.test(v)) throw new HttpError(400, `銘柄コードが正しくありません: ${s}（例: 7203）`); }
   else if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(v)) throw new HttpError(400, `ティッカーが正しくありません: ${s}（例: AAPL）`);
   return v;
@@ -114,7 +152,7 @@ async function ensure(market: Market, symbol: string, force = false) {
   if (!force && row?.last_fetched && Date.now() - Date.parse(row.last_fetched) < REFRESH_MS) return row;
   let from: string | null = null;
   if (row?.last_date) { const d = new Date(row.last_date); d.setDate(d.getDate() - 10); from = d.toISOString().slice(0, 10); }
-  const { bars, name } = market === "JP" ? await fetchJP(symbol, from) : await fetchUS(symbol, from);
+  const { bars, name } = market === "IX" ? await fetchIX(symbol, from) : market === "JP" ? await fetchJP(symbol, from) : await fetchUS(symbol, from);
   if (!bars.length && !row) throw new HttpError(404, `${symbol} の株価が見つかりませんでした`);
   for (let i = 0; i < bars.length; i += 1000) {
     const { error } = await db.from("st_prices").upsert(bars.slice(i, i + 1000).map(b => ({ market, symbol, ...b })));
@@ -169,10 +207,22 @@ const lookbackFrom = (lastDate: string | null) => {
 const defaultIndex = (market: Market) => market === "US" ? "SPY" : "1306";
 function withRegime(market: Market, cfgIn: any) {
   const cfg: any = normalizeCfg(cfgIn);
-  if (cfg.regime.mode !== "off") cfg.regime.symbol = cleanSymbol(market, cfg.regime.symbol || defaultIndex(market));
+  if (cfg.regime.mode !== "off") {
+    cfg.regime.symbol = cleanSymbol(market, cfg.regime.symbol || defaultIndex(market));
+    if (!cfg.regime.volSym) cfg.regime.volSym = market === "US" ? "VIX" : "NKVI";
+    cfg.regime.volLag = market === "JP" && cfg.regime.volSym === "VIX"; // 米国の終値は日本の引け後に出るので前日までで判定
+  }
   return cfg;
 }
-const regimeSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" ? cfg.regime.symbol : null;
+const regimeSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" && cfg.regime.rule !== "vol" ? cfg.regime.symbol : null;
+const volSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" && cfg.regime.rule !== "ma" && cfg.regime.volSym ? cfg.regime.volSym : null;
+// 恐怖指数のデータを data["IX:VIX"] のような名前で足す
+async function addVol(cfg: any, data: Record<string, Bar[]>, from: string | null, errors?: string[]) {
+  const vs = volSymbol(cfg);
+  if (!vs) return;
+  try { await ensure("IX", vs); data["IX:" + vs] = await loadBars("IX", vs, from); if (!data["IX:" + vs].length) throw new Error("データがありません"); }
+  catch (e) { const msg = `恐怖指数 ${vs}: ${e instanceof Error ? e.message : e}`; if (errors) errors.push(msg); else throw new HttpError(400, msg); }
+}
 
 async function createBot(userId: string, body: any) {
   const market: Market = body.market === "US" ? "US" : "JP";
@@ -186,7 +236,8 @@ async function createBot(userId: string, body: any) {
   if (dates.length < 2) throw new HttpError(400, "株価データが足りません");
   const st: any = initialState(cfg.initialCash);
   st.lastDate = dates[dates.length - 2];
-  const data = Object.fromEntries(Object.entries(got).map(([k, v]) => [k, v.bars]));
+  const data: Record<string, Bar[]> = Object.fromEntries(Object.entries(got).map(([k, v]) => [k, v.bars]));
+  await addVol(cfg, data, lookbackFrom(null));
   const name = String(body.name ?? "").trim().slice(0, 40) || `${(STRATEGIES as any)[cfg.strategy].label}（${cfg.symbols.join("・")}）`;
   const { data: bot, error } = await db.from("st_bots").insert({ user_id: userId, name, market, cfg, state: st, active: true }).select().single();
   if (error) throw new HttpError(500, error.message);
@@ -245,6 +296,7 @@ async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
       try { await ensure(bot.market, s); data[s] = await loadBars(bot.market, s, lookbackFrom(bot.state.lastDate)); }
       catch (e) { errors.push(`${s}: ${e instanceof Error ? e.message : e}`); }
     }
+    await addVol(cfg, data, lookbackFrom(bot.state.lastDate), errors);
   }
   const r = runDays(cfg, bot.state, data, { applyHalts: true });
   const days = r.equity.length;
@@ -311,6 +363,17 @@ Deno.serve(async (req) => {
       if (!k?.value || req.headers.get("x-cron-key") !== k.value) throw new HttpError(401, "unauthorized");
       return json({ ok: true, result: await runAll() });
     }
+    // 恐怖指数の取得テスト・更新（同じ合言葉で守る）
+    if (body.action === "ix_refresh") {
+      const { data: k } = await db.from("st_config").select("value").eq("key", "cron_key").maybeSingle();
+      if (!k?.value || req.headers.get("x-cron-key") !== k.value) throw new HttpError(401, "unauthorized");
+      const out: Record<string, unknown> = {};
+      for (const s of Object.keys(IX_NAMES)) {
+        try { const r = await ensure("IX", s, true); out[s] = { first: r?.first_date, last: r?.last_date }; }
+        catch (e) { out[s] = { error: e instanceof Error ? e.message : String(e) }; }
+      }
+      return json({ ok: true, result: out });
+    }
 
     const user = await requireUser(req);
     switch (body.action) {
@@ -342,7 +405,7 @@ Deno.serve(async (req) => {
         return json(await saveToNotion(NOTION_API_KEY, { title: String(pg.title), genre: String(pg.genre ?? "株・投資"), summary: String(pg.summary ?? ""), date: today, sections: Array.isArray(pg.sections) ? pg.sections : [] }));
       }
       case "bars": {
-        const market: Market = body.market === "US" ? "US" : "JP";
+        const market: Market = body.market === "US" ? "US" : body.market === "IX" ? "IX" : "JP";
         return json(await bars(market, Array.isArray(body.symbols) ? body.symbols : [], body.from ?? null, !!body.force));
       }
       case "create_bot":
@@ -379,6 +442,7 @@ Deno.serve(async (req) => {
         const cfg = withRegime(bot.market, { ...bot.cfg, regime: { ...(bot.cfg.regime ?? {}), ...(body.regime ?? {}) } });
         const rs = regimeSymbol(cfg);
         if (rs) { const r = await bars(bot.market, [rs], lookbackFrom(null)); if (Object.keys(r.errors).length) throw new HttpError(400, Object.values(r.errors)[0]); }
+        await addVol(cfg, {}, lookbackFrom(null));
         await db.from("st_bots").update({ cfg, state: { ...bot.state, regimeBear: null } }).eq("id", bot.id);
         return json({ ok: true });
       }

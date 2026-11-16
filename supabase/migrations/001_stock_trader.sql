@@ -102,3 +102,7 @@ alter table public.st_push_subs enable row level security;
 create policy "st_push_subs own select" on public.st_push_subs for select to authenticated using ((select auth.uid()) = user_id);
 grant select, insert, update, delete on public.st_push_subs to service_role;
 grant select on public.st_push_subs to authenticated;
+
+-- 恐怖指数（VIX・日経平均VI）を market='IX' として保存する
+alter table public.st_symbols drop constraint if exists st_symbols_market_check;
+alter table public.st_symbols add constraint st_symbols_market_check check (market in ('JP','US','IX'));

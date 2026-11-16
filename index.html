@@ -87,6 +87,12 @@ table.t td.side-buy{color:var(--up)} table.t td.side-sell{color:var(--dn)}
 table.sw tr.r{cursor:pointer} table.sw tr.r:active{background:var(--soft)}
 table.sw td.p{font-family:inherit;font-size:12px;white-space:normal;line-height:1.4}
 .star{color:#c99a12}
+a.ext{display:block;padding:12px 0;border-bottom:1px solid var(--soft);color:var(--ink);text-decoration:none}
+a.ext b{display:block;font-size:15px;color:var(--acc)} a.ext span{font-size:12px;color:var(--mu)}
+.mk{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;margin-bottom:6px}
+.mk .big{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1}
+.lv{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px}
+.lv.calm{background:#e3f1ea;color:var(--up)} .lv.warn{background:#fbf1dc;color:var(--warn)} .lv.hot{background:#fbe9e6;color:var(--dn)}
 .swsum{font-size:13px;line-height:1.6;background:var(--soft);border-radius:10px;padding:10px 12px;margin:12px 0}
 .tscroll{overflow-x:auto;max-height:420px;overflow-y:auto}
 .empty{color:var(--mu);font-size:13px;text-align:center;padding:24px 8px;line-height:1.7}
@@ -183,7 +189,15 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <select id="btRgMode" class="in"><option value="off">使わない</option><option value="auto">指数で自動判定する</option></select>
         </div>
         <div id="btRgBox" class="hidden">
-          <div class="row grid2">
+          <div class="row">
+            <label class="lab" for="btRgRule">弱気の判定方法</label>
+            <select id="btRgRule" class="in"><option value="ma">指数の移動平均</option><option value="vol">恐怖指数（VIX・日経VI）</option><option value="either">どちらかが弱気なら弱気</option></select>
+          </div>
+          <div class="row grid2 hidden" id="btRgVolBox">
+            <div><label class="lab" for="btRgVolSym">恐怖指数</label><select id="btRgVolSym" class="in"><option value="NKVI">日経平均VI</option><option value="VIX">VIX（米国）</option></select></div>
+            <div><label class="lab" for="btRgVolTh">この値を超えたら弱気</label><input id="btRgVolTh" class="in num" inputmode="decimal" value="30"></div>
+          </div>
+          <div class="row grid2" id="btRgMaBox">
             <div><label class="lab" for="btRgSym">指数（ETF）</label><input id="btRgSym" class="in" autocapitalize="characters" autocomplete="off"></div>
             <div><label class="lab" for="btRgMa">移動平均（日）</label><input id="btRgMa" class="in num" inputmode="numeric" value="200"></div>
           </div>
@@ -258,6 +272,18 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
       <button class="btn danger" id="stopAll" style="margin-top:6px">すべてのボットを停止</button>
     </div>
 
+    <!-- 市況 -->
+    <div id="vMkt" class="hidden">
+      <div id="mktBody"><div class="card empty"><span class="spin"></span>読み込み中…</div></div>
+      <div class="card">
+        <h2>外部の情報</h2>
+        <a class="ext" href="https://www.cmegroup.com/ja/markets/interest-rates/cme-fedwatch-tool.html" target="_blank" rel="noopener"><b>CME FedWatch</b><span>米国の利下げ・利上げの織り込み（FOMCごとの確率）</span></a>
+        <a class="ext" href="https://jp.investing.com/economic-calendar" target="_blank" rel="noopener"><b>経済指標カレンダー</b><span>雇用統計・CPIなど、相場が動きやすい日の確認</span></a>
+        <a class="ext" href="https://www.reuters.com/jp/markets/" target="_blank" rel="noopener"><b>ロイター マーケット</b><span>ニュースで背景を読む</span></a>
+        <p class="hint">見たうえで相場感を変えたいときは、模擬取引のボットの「相場感（市況）」で強気・弱気に切り替えられます。</p>
+      </div>
+    </div>
+
     <!-- 設定 -->
     <div id="vSet" class="hidden">
       <div class="card">
@@ -301,6 +327,7 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
 <nav class="tabs hidden" id="tabs">
   <button data-v="vBT" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-7"/></svg>検証</button>
   <button data-v="vPaper"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>模擬取引</button>
+  <button data-v="vMkt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></svg>市況</button>
   <button data-v="vSet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>設定</button>
 </nav>
 
