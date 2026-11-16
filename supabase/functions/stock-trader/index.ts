@@ -165,14 +165,24 @@ const lookbackFrom = (lastDate: string | null) => {
   return d.toISOString().slice(0, 10);
 };
 
+// 相場フィルターで使う指数（ETF）。未指定なら日本株は TOPIX連動ETF、米国株は S&P500 ETF
+const defaultIndex = (market: Market) => market === "US" ? "SPY" : "1306";
+function withRegime(market: Market, cfgIn: any) {
+  const cfg: any = normalizeCfg(cfgIn);
+  if (cfg.regime.mode !== "off") cfg.regime.symbol = cleanSymbol(market, cfg.regime.symbol || defaultIndex(market));
+  return cfg;
+}
+const regimeSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" ? cfg.regime.symbol : null;
+
 async function createBot(userId: string, body: any) {
   const market: Market = body.market === "US" ? "US" : "JP";
-  const cfg = normalizeCfg({ ...body.cfg, symbols: (body.cfg?.symbols ?? []).map((s: string) => cleanSymbol(market, s)) });
+  const cfg = withRegime(market, { ...body.cfg, symbols: (body.cfg?.symbols ?? []).map((s: string) => cleanSymbol(market, s)) });
   if (!cfg.symbols.length) throw new HttpError(400, "銘柄を1つ以上入れてください");
-  const { symbols: got, errors } = await bars(market, cfg.symbols, lookbackFrom(null));
+  const rs = regimeSymbol(cfg);
+  const { symbols: got, errors } = await bars(market, [...new Set([...cfg.symbols, ...(rs ? [rs] : [])])], lookbackFrom(null));
   if (Object.keys(errors).length) throw new HttpError(400, Object.values(errors)[0]);
   // 最新の1日ぶんから判定を始める（今日の終値でシグナルを見て、次の営業日の始値で約定）
-  const dates = [...new Set(Object.values(got).flatMap(x => x.bars.map(b => b.d)))].sort();
+  const dates = [...new Set(cfg.symbols.flatMap((s: string) => got[s].bars.map(b => b.d)))].sort() as string[];
   if (dates.length < 2) throw new HttpError(400, "株価データが足りません");
   const st: any = initialState(cfg.initialCash);
   st.lastDate = dates[dates.length - 2];
@@ -219,6 +229,7 @@ function runSummary(bot: any, r: any): string | null {
   if (r.trades.length > 4) lines.unshift(`約定${r.trades.length}件（最新4件）`);
   const fresh = (r.state.pending ?? []).filter((o: any) => o.signalDate === r.state.lastDate);
   for (const o of fresh.slice(0, 3)) lines.push(`次の営業日に${o.side === "buy" ? "買い" : "売り"}：${o.symbol}（${o.reason}）`);
+  for (const n of r.notes.filter((n: any) => n.msg.startsWith("相場フィルター")).slice(-1)) lines.push(n.msg);
   if (r.state.halted && !bot.state.halted) lines.push(`安全装置で停止：${r.state.haltReason}`);
   return lines.length ? lines.join("\n") : null;
 }
@@ -229,7 +240,8 @@ async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
   const errors: string[] = [];
   if (!data) {
     data = {};
-    for (const s of cfg.symbols) {
+    const rs = regimeSymbol(cfg);
+    for (const s of [...new Set([...cfg.symbols, ...(rs ? [rs] : [])])]) {
       try { await ensure(bot.market, s); data[s] = await loadBars(bot.market, s, lookbackFrom(bot.state.lastDate)); }
       catch (e) { errors.push(`${s}: ${e instanceof Error ? e.message : e}`); }
     }
@@ -359,6 +371,15 @@ Deno.serve(async (req) => {
           state.halted = false; state.haltReason = null; state.peak = state.prevEquity;
         }
         await db.from("st_bots").update({ active, state, halted_reason: active ? null : bot.halted_reason }).eq("id", bot.id);
+        return json({ ok: true });
+      }
+      case "set_regime": {
+        // 相場感の切り替え（auto=指数で自動 / bull=強気で固定 / bear=弱気で固定 / off=使わない）
+        const bot = await ownBot(user.id, body.id);
+        const cfg = withRegime(bot.market, { ...bot.cfg, regime: { ...(bot.cfg.regime ?? {}), ...(body.regime ?? {}) } });
+        const rs = regimeSymbol(cfg);
+        if (rs) { const r = await bars(bot.market, [rs], lookbackFrom(null)); if (Object.keys(r.errors).length) throw new HttpError(400, Object.values(r.errors)[0]); }
+        await db.from("st_bots").update({ cfg, state: { ...bot.state, regimeBear: null } }).eq("id", bot.id);
         return json({ ok: true });
       }
       case "stop_all":

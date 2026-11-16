@@ -1,5 +1,6 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { STRATEGIES, GRIDS, backtest, sweep, normalizeCfg } from "./engine.js";
+import { STRATEGIES, normalizeCfg } from "./engine.js";
+import { GRIDS, backtest, sweep } from "./research.js";
 
 const CFG = window.ST_CONFIG;
 const sb = createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -133,6 +134,8 @@ function setMarket(m) {
   $("btSymbols").placeholder = m === "JP" ? "7203, 6758" : "AAPL, MSFT";
   $("btSymHint").textContent = m === "JP" ? "4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）" : "ティッカー（例：AAPL アップル、MSFT マイクロソフト、SPY S&P500 ETF）";
   $("btCashLab").textContent = m === "JP" ? "初期資金（円）" : "初期資金（ドル）";
+  $("btRgSym").value = m === "JP" ? "1306" : "SPY";
+  $("btRgHint").textContent = `指数の終値が移動平均以下の日を「弱気」とみなします。初期値は${m === "JP" ? "TOPIX連動ETF（1306）" : "S&P500 ETF（SPY）"}の200日線です。`;
   $("btCash").value = m === "JP" ? "1000000" : "10000";
   $("btLot").innerHTML = m === "JP"
     ? `<option value="100">100株（単元株）</option><option value="1">1株（単元未満株）</option>`
@@ -153,6 +156,7 @@ function readCfg() {
     strategy, params, symbols: parseSyms($("btSymbols").value),
     initialCash: n("btCash"), lot: n("btLot"), slPct: n("btSl"), tpPct: n("btTp"),
     feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
+    regime: { mode: $("btRgMode").value, symbol: $("btRgSym").value, ma: n("btRgMa"), action: $("btRgAct").value },
   });
 }
 const isoAgo = days => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); };
@@ -176,11 +180,16 @@ $("btRun").onclick = async () => {
   if (!cfg.symbols.length) { $("btErr").textContent = "銘柄を入れてください"; return; }
   if (cfg.strategy === "sma" && cfg.params.short >= cfg.params.long) { $("btErr").textContent = "移動平均は「短期」を「長期」より小さくしてください"; return; }
   if (cfg.strategy === "macd" && cfg.params.fast >= cfg.params.slow) { $("btErr").textContent = "MACDは「短期EMA」を「長期EMA」より小さくしてください"; return; }
+  if (cfg.strategy === "tma" && !(cfg.params.short < cfg.params.mid && cfg.params.mid < cfg.params.long)) { $("btErr").textContent = "移動平均は 短期＜中期＜長期 の順にしてください"; return; }
+  if (cfg.strategy === "stoch" && cfg.params.buy >= cfg.params.sell) { $("btErr").textContent = "「買い」は「売り」より小さくしてください"; return; }
+  const rgSym = cfg.regime.mode === "auto" ? (cfg.regime.symbol || (market === "JP" ? "1306" : "SPY")) : null;
+  if (rgSym) cfg.regime.symbol = rgSym;
   busy($("btRun"), true, "株価を取得して計算中…");
   try {
     const start = period ? isoAgo(Math.round(period * 365.25)) : null;
     const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null; // シグナルの助走分も取る
-    const { data, errors } = await getBars(market, cfg.symbols, from);
+    const { data, errors } = await getBars(market, [...new Set([...cfg.symbols, ...(rgSym ? [rgSym] : [])])], from);
+    if (rgSym && !data[rgSym]?.length) throw new Error(`相場フィルターの指数 ${rgSym} の株価が取得できませんでした${errors[rgSym] ? "：" + errors[rgSym] : ""}`);
     const ok = cfg.symbols.filter(s => data[s]?.length);
     const errText = Object.entries(errors).map(([s, e]) => `${s}：${e}`).join("\n");
     if (!ok.length) throw new Error(errText || "株価が取得できませんでした");
@@ -217,7 +226,8 @@ function renderBT(errText) {
   ], { m });
   $("btSymSeg").innerHTML = cfg.symbols.map((s, i) => `<button data-s="${esc(s)}" class="${i ? "" : "on"}">${esc(symLabel(m, s))}</button>`).join("");
   drawPx(cfg.symbols[0]);
-  const notes = [...(errText ? [errText] : []), ...res.notes.slice(-5).map(n => `${fmtD(n.d)} ${n.msg}`)];
+  if (cfg.regime.mode !== "off") $("btCmp").innerHTML += `<br>相場フィルター：期間の <b class="num">${res.bearPct.toFixed(0)}%</b> の日を弱気と判定（${esc(regimeText(cfg))}）。`;
+  const notes = [...(errText ? [errText] : []), ...res.notes.filter(n => !n.msg.startsWith("相場フィルター")).slice(-5).map(n => `${fmtD(n.d)} ${n.msg}`)];
   $("btNotes").innerHTML = notes.length ? `<div class="notes">${notes.map(esc).join("<br>")}</div>` : "";
   $("btTradeCount").textContent = `${res.trades.length}件`;
   $("btTrades").innerHTML = tradeTable(res.trades.slice().reverse(), m);
@@ -242,7 +252,16 @@ function tradeTable(trades, m) {
 
 const paramText = cfg => {
   const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
-  return `${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}`;
+  return `${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
+};
+const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
+const regimeText = cfg => {
+  const r = cfg.regime || { mode: "off" };
+  if (r.mode === "off") return "使わない";
+  const act = `弱気のとき：${RG_ACT[r.action] || RG_ACT.nobuy}`;
+  if (r.mode === "bull") return "強気で固定";
+  if (r.mode === "bear") return `弱気で固定／${act}`;
+  return `${r.symbol} が${r.ma}日線以下なら弱気／${act}`;
 };
 const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
 
@@ -302,6 +321,7 @@ $("btNotion").onclick = async () => {
       { type: "bullets", items: [
         `市場：${m === "JP" ? "日本株" : "米国株"}`, `銘柄：${syms}`, `戦略：${paramText(cfg)}`, `期間：${fmtD(first)}〜${fmtD(last)}`,
         `初期資金：${money(cfg.initialCash, m)}／売買単位：${cfg.lot}株`,
+        `相場フィルター：${regimeText(cfg)}`,
         `損切り：${cfg.slPct ? cfg.slPct + "%" : "なし"}／利確：${cfg.tpPct ? cfg.tpPct + "%" : "なし"}／手数料：${cfg.feePct}%／滑り：${cfg.slipPct}%`,
         "約定：終値で判定し翌営業日の始値で約定（株ラボで計算）",
       ] },
@@ -476,6 +496,11 @@ async function openBot(id) {
       ${(st.pending || []).length ? `<table class="t"><tr><th>銘柄</th><th>売買</th><th>理由</th></tr>${st.pending.map(o => `<tr><td>${esc(symLabel(m, o.symbol))}</td><td class="side-${o.side}">${o.side === "buy" ? "買い" : "売り"}</td><td style="font-family:inherit">${esc(o.reason)}</td></tr>`).join("")}</table><p class="hint">始値で約定する想定です（模擬）。</p>` : `<div class="empty">注文はありません</div>`}
     </div>
     <div class="card"><h2>取引履歴</h2><div class="tscroll"><table class="t">${tradeTable(trRes.data || [], m)}</table></div></div>
+    <div class="card"><h2>相場感（市況）</h2>
+      <div class="seg" id="bsRg">${[["off", "使わない"], ["auto", "自動"], ["bull", "強気"], ["bear", "弱気"]].map(([v, l]) => `<button data-v="${v}" class="${(cfg.regime?.mode || "off") === v ? "on" : ""}">${l}</button>`).join("")}</div>
+      <p class="hint">${(cfg.regime?.mode || "off") === "off" ? "相場フィルターは使っていません。「自動」は指数で判定、「強気」「弱気」は自分の相場感で固定します。" : `いまの判定：<b class="${st.regimeBear ? "dn" : "up"}">${st.regimeBear == null ? "次の更新で判定" : st.regimeBear ? "弱気" : "強気"}</b>（${esc(regimeText(cfg))}）`}</p>
+      ${(cfg.regime?.mode || "off") !== "off" ? `<select id="bsRgAct" class="in" style="margin-top:8px">${Object.entries(RG_ACT).map(([v, l]) => `<option value="${v}" ${cfg.regime.action === v ? "selected" : ""}>弱気のとき：${l}</option>`).join("")}</select>` : ""}
+    </div>
     <div class="card"><h2>設定</h2>
       <p class="hint" style="margin:0;line-height:1.8">${m === "JP" ? "日本株" : "米国株"}／${esc(paramText(cfg))}<br>
       銘柄：${cfg.symbols.map(s => esc(symLabel(m, s))).join("、")}<br>
@@ -489,6 +514,13 @@ async function openBot(id) {
     <button class="btn danger" id="bsDelete">このボットを削除</button>`;
   drawChart($("bsChart"), [{ pts: (eqRes || []).map(e => ({ d: e.d, v: e.equity })), color: "#0f5c47", width: 2, tipColor: "#7fe0bd" }], { m });
   const act = async (btn, label, fn) => { busy(btn, true, label); try { await fn(); await loadBots(); await openBot(id); } catch (e) { toast(e.message); busy(btn, false); } };
+  $("bsRg").onclick = async e => {
+    const btn = e.target.closest("button"); if (!btn || btn.classList.contains("on")) return;
+    try { await call("set_regime", { id, regime: { mode: btn.dataset.v } }); toast("相場感を変更しました"); await loadBots(); await openBot(id); } catch (err) { toast(err.message); }
+  };
+  $("bsRgAct") && ($("bsRgAct").onchange = async e => {
+    try { await call("set_regime", { id, regime: { action: e.target.value } }); toast("変更しました"); await loadBots(); await openBot(id); } catch (err) { toast(err.message); }
+  });
   $("bsRun") && ($("bsRun").onclick = () => act($("bsRun"), "更新中…", async () => { const r = await call("run_bot", { id }); toast(r.result.processed ? `${r.result.processed}日分を処理しました` : "新しい株価はまだありません"); }));
   $("bsStop") && ($("bsStop").onclick = () => act($("bsStop"), "停止中…", () => call("set_active", { id, active: false })));
   $("bsResume") && ($("bsResume").onclick = () => {
@@ -548,6 +580,7 @@ sb.auth.onAuthStateChange((_ev, session) => {
 /* ---------- 初期化 ---------- */
 $("btStrategy").innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
 $("btStrategy").onchange = renderParams;
+$("btRgMode").onchange = () => $("btRgBox").classList.toggle("hidden", $("btRgMode").value !== "auto");
 segInit("btMarket", setMarket);
 segInit("btPeriod", v => period = Number(v));
 setMarket("JP");

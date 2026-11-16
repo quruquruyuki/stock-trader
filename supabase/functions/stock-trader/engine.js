@@ -44,6 +44,48 @@ export const STRATEGIES = {
       { key: "signal", label: "シグナル", def: 9, min: 2, max: 100 },
     ],
   },
+  roc: {
+    label: "モメンタム（騰落率）",
+    desc: "N日前と比べた上昇率が基準を超えていたら持つ、下回ったら売る。上がっているものに乗る順張り。",
+    params: [
+      { key: "period", label: "比較（日前）", def: 60, min: 5, max: 300 },
+      { key: "th", label: "基準（%）", def: 0, min: -20, max: 50, step: 0.5 },
+    ],
+  },
+  stoch: {
+    label: "ストキャスティクス逆張り",
+    desc: "直近N日の値幅の中で終値が下のほう（%Kが「買い」未満）なら買い、上のほう（「売り」超え）で売り。",
+    params: [
+      { key: "period", label: "期間（日）", def: 14, min: 3, max: 100 },
+      { key: "buy", label: "買い（未満）", def: 20, min: 1, max: 99 },
+      { key: "sell", label: "売り（超え）", def: 80, min: 1, max: 99 },
+    ],
+  },
+  tma: {
+    label: "3本の移動平均（パーフェクトオーダー）",
+    desc: "短期＞中期＞長期の順に並んだら買い、並びが崩れたら売り。だましが少ない代わりに売買は遅め。",
+    params: [
+      { key: "short", label: "短期（日）", def: 5, min: 2, max: 100 },
+      { key: "mid", label: "中期（日）", def: 25, min: 3, max: 200 },
+      { key: "long", label: "長期（日）", def: 75, min: 5, max: 400 },
+    ],
+  },
+  dip: {
+    label: "連続下落の押し目買い",
+    desc: "終値がN日続けて下がったら買い、終値がM日移動平均を上回ったら売り。短期の反発を狙う。",
+    params: [
+      { key: "down", label: "連続下落（日）", def: 3, min: 2, max: 10 },
+      { key: "exit", label: "売り：移動平均（日）", def: 5, min: 2, max: 50 },
+    ],
+  },
+  tom: {
+    label: "月末・月初だけ持つ",
+    desc: "毎月「開始日」以降から翌月「終了日」までだけ持つ。月の変わり目は上がりやすいという経験則。",
+    params: [
+      { key: "from", label: "開始日（日）", def: 25, min: 15, max: 31 },
+      { key: "to", label: "終了日（日）", def: 3, min: 1, max: 10 },
+    ],
+  },
   hold: {
     label: "買って持ち続ける",
     desc: "最初に買って、そのまま持ち続ける（比較用）。",
@@ -66,6 +108,10 @@ export const DEFAULT_CFG = {
   maxDailyLossPct: 5,  // 1日でこれ以上資産が減ったら停止（%）
   maxDrawdownPct: 20,  // 最高値からこれ以上資産が減ったら停止（%）
   trendMa: 0,          // トレンド条件：終値がこの日数の移動平均より上のときだけ持つ（0=使わない）
+  // 相場フィルター（市況）。mode: off=使わない / auto=指数で判定 / bull=強気で固定 / bear=弱気で固定
+  // auto は「指数（symbol）の終値が ma 日移動平均以下」のとき弱気。action は弱気のときの動き:
+  //   nobuy=新しく買わない / exit=持ち株も売って待つ / half=買う量を半分にする
+  regime: { mode: "off", symbol: "", ma: 200, action: "nobuy" },
 };
 
 export function normalizeCfg(c) {
@@ -94,6 +140,12 @@ export function normalizeCfg(c) {
     maxDailyLossPct: num(cfg.maxDailyLossPct, 0, 100, 5),
     maxDrawdownPct: num(cfg.maxDrawdownPct, 0, 100, 20),
     trendMa: Math.round(num(cfg.trendMa, 0, 400, 0)),
+    regime: {
+      mode: ["auto", "bull", "bear"].includes(cfg.regime?.mode) ? cfg.regime.mode : "off",
+      symbol: String(cfg.regime?.symbol ?? "").trim().toUpperCase().slice(0, 10),
+      ma: Math.round(num(cfg.regime?.ma, 5, 400, 200)),
+      action: ["exit", "half"].includes(cfg.regime?.action) ? cfg.regime.action : "nobuy",
+    },
   };
 }
 
@@ -156,6 +208,42 @@ function rawSignals(bars, strategy, p) {
     }
     return out;
   }
+  if (strategy === "roc") {
+    for (let i = p.period; i < n; i++) out[i] = c[i - p.period] > 0 && (c[i] / c[i - p.period] - 1) * 100 > p.th ? 1 : 0;
+    return out;
+  }
+  if (strategy === "stoch") {
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (i >= p.period - 1) {
+        let hh = -Infinity, ll = Infinity;
+        for (let k = i - p.period + 1; k <= i; k++) { hh = Math.max(hh, bars[k].h); ll = Math.min(ll, bars[k].l); }
+        const kv = hh > ll ? (c[i] - ll) / (hh - ll) * 100 : 50;
+        if (!pos && kv < p.buy) pos = 1; else if (pos && kv > p.sell) pos = 0;
+      }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "tma") {
+    const a = smaArr(c, p.short), b = smaArr(c, p.mid), l = smaArr(c, p.long);
+    for (let i = 0; i < n; i++) out[i] = l[i] != null && a[i] > b[i] && b[i] > l[i] ? 1 : 0;
+    return out;
+  }
+  if (strategy === "dip") {
+    const m = smaArr(c, p.exit);
+    let pos = 0, downs = 0;
+    for (let i = 1; i < n; i++) {
+      downs = c[i] < c[i - 1] ? downs + 1 : 0;
+      if (!pos && downs >= p.down) pos = 1; else if (pos && m[i] != null && c[i] > m[i]) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "tom") {
+    for (let i = 0; i < n; i++) { const day = Number(bars[i].d.slice(8, 10)); out[i] = day >= p.from || day <= p.to ? 1 : 0; }
+    return out;
+  }
   if (strategy === "macd") {
     const f = emaArr(c, p.fast), sl = emaArr(c, p.slow);
     const macd = c.map((_, i) => f[i] != null && sl[i] != null ? f[i] - sl[i] : null);
@@ -198,7 +286,7 @@ function rawSignals(bars, strategy, p) {
 
 /* ---------- 模擬口座 ---------- */
 export function initialState(cash) {
-  return { cash, positions: {}, pending: [], blocked: {}, lastClose: {}, lastDate: null, prevEquity: cash, peak: cash, halted: false, haltReason: null };
+  return { cash, positions: {}, pending: [], blocked: {}, lastClose: {}, lastDate: null, prevEquity: cash, peak: cash, halted: false, haltReason: null, regimeBear: null };
 }
 const clone = o => JSON.parse(JSON.stringify(o));
 function equityOf(st) {
@@ -221,6 +309,15 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   }
   const dates = [...new Set(syms.flatMap(s => data[s].map(b => b.d)))]
     .filter(d => (!st.lastDate || d > st.lastDate) && (!opts.toDate || d <= opts.toDate)).sort();
+  // 相場フィルター：その日が「弱気」かどうか
+  const rg = cfg.regime;
+  let bearOn = () => rg.mode === "bear";
+  if (rg.mode === "auto" && data[rg.symbol]?.length) {
+    const ib = data[rg.symbol], ima = smaArr(ib.map(b => b.c), rg.ma);
+    let ip = -1;
+    bearOn = D => { while (ip + 1 < ib.length && ib[ip + 1].d <= D) ip++; return ip >= 0 && ima[ip] != null && ib[ip].c <= ima[ip]; };
+  }
+  let bearDays = 0;
   const slip = cfg.slipPct / 100, fee = cfg.feePct / 100;
   const posPct = Math.min(cfg.maxPosPct / 100, 1 / Math.max(1, syms.length));
 
@@ -246,7 +343,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
       } else {
         if (st.positions[o.symbol]) continue;
         const price = b.o * (1 + slip);
-        const budget = Math.min(st.cash, equityOf(st) * posPct);
+        const budget = Math.min(st.cash, equityOf(st) * posPct * (o.scale || 1));
         const qty = Math.floor(budget / (price * (1 + fee)) / cfg.lot) * cfg.lot;
         if (qty <= 0) { notes.push({ d: D, msg: `${o.symbol}：資金が足りず買えませんでした（${cfg.lot}株単位）` }); continue; }
         const cost = qty * price, f = cost * fee;
@@ -274,6 +371,12 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
     } else st.peak = Math.max(st.peak, eq);
 
     // 4) 今日の終値でシグナルを判定し、翌営業日の注文を出す
+    const bear = rg.mode !== "off" && bearOn(D);
+    if (bear) bearDays++;
+    if (rg.mode !== "off" && bear !== st.regimeBear) {
+      if (st.regimeBear != null) notes.push({ d: D, msg: `相場フィルター：${bear ? "弱気" : "強気"}に変わりました` });
+      st.regimeBear = bear;
+    }
     if (!st.halted) {
       for (const s of syms) {
         const i = idx[s].get(D);
@@ -284,101 +387,22 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
           let reason = null;
           if (cfg.slPct > 0 && c <= p.avg * (1 - cfg.slPct / 100)) reason = "損切り";
           else if (cfg.tpPct > 0 && c >= p.avg * (1 + cfg.tpPct / 100)) reason = "利確";
+          else if (bear && rg.action === "exit") reason = "相場フィルター";
           else if (!want) reason = "売りシグナル";
           if (reason && !has("sell")) {
             st.pending.push({ symbol: s, side: "sell", reason, signalDate: D });
-            if (reason !== "売りシグナル") st.blocked[s] = true; // 損切り・利確のあとは、シグナルが一度消えるまで買い直さない
+            if (reason === "損切り" || reason === "利確") st.blocked[s] = true; // 損切り・利確のあとは、シグナルが一度消えるまで買い直さない
           }
         } else {
           if (st.blocked[s] && !want) delete st.blocked[s];
-          if (want && !st.blocked[s] && !has("buy")) st.pending.push({ symbol: s, side: "buy", reason: "買いシグナル", signalDate: D });
+          const stopBuy = bear && rg.action !== "half";
+          if (want && !stopBuy && !st.blocked[s] && !has("buy")) st.pending.push({ symbol: s, side: "buy", reason: "買いシグナル", signalDate: D, ...(bear ? { scale: 0.5 } : {}) });
         }
       }
     }
     st.prevEquity = eq;
     st.lastDate = D;
   }
-  return { state: st, trades, equity, notes };
+  return { state: st, trades, equity, notes, bearDays };
 }
 
-/* ---------- バックテスト ---------- */
-// opts.from（YYYY-MM-DD）より前のデータは、シグナル計算の助走にだけ使う。opts.to までで止める
-export function backtest(cfgIn, data, opts = {}) {
-  const cfg = normalizeCfg(cfgIn);
-  const start = () => {
-    const st = initialState(cfg.initialCash);
-    if (opts.from) { const d = new Date(opts.from + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 1); st.lastDate = d.toISOString().slice(0, 10); }
-    return st;
-  };
-  const o = { applyHalts: false, toDate: opts.to || null };
-  const main = runDays(cfg, start(), data, o);
-  const bench = runDays({ ...cfg, strategy: "hold", params: {}, slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0 }, start(), data, o);
-  return { cfg, ...main, metrics: metrics(main.equity, main.trades, cfg.initialCash), bench: { equity: bench.equity, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
-}
-
-export function metrics(equity, trades, initial) {
-  if (!equity.length) return null;
-  const final = equity[equity.length - 1].equity;
-  const days = (Date.parse(equity[equity.length - 1].d) - Date.parse(equity[0].d)) / 864e5;
-  const years = Math.max(days / 365.25, 1 / 365.25);
-  let peak = -Infinity, maxDD = 0;
-  const rets = [];
-  for (let i = 0; i < equity.length; i++) {
-    const e = equity[i].equity;
-    peak = Math.max(peak, e);
-    if (peak > 0) maxDD = Math.max(maxDD, (peak - e) / peak);
-    if (i > 0 && equity[i - 1].equity > 0) rets.push(e / equity[i - 1].equity - 1);
-  }
-  const mean = rets.reduce((a, b) => a + b, 0) / Math.max(1, rets.length);
-  const sd = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rets.length - 1));
-  const sells = trades.filter(t => t.side === "sell");
-  const wins = sells.filter(t => t.pnl > 0).length;
-  return {
-    final,
-    totalPct: (final / initial - 1) * 100,
-    cagrPct: final > 0 ? (Math.pow(final / initial, 1 / years) - 1) * 100 : -100,
-    maxDDPct: maxDD * 100,
-    sharpe: sd > 0 ? mean / sd * Math.sqrt(252) : 0,
-    trades: trades.length,
-    roundTrips: sells.length,
-    winPct: sells.length ? wins / sells.length * 100 : null,
-    fees: trades.reduce((a, t) => a + (t.fee || 0), 0),
-  };
-}
-
-/* ---------- パラメータの総当たり ---------- */
-// 戦略ごとの候補。前半（学習期間）で成績を出し、後半（確認期間）でも通用するかを見る
-export const GRIDS = {
-  sma: { short: [3, 5, 10, 15, 20, 25], long: [20, 25, 50, 75, 100, 150, 200] },
-  rsi: { period: [7, 10, 14, 21], buy: [20, 25, 30, 35], sell: [60, 65, 70, 75, 80] },
-  breakout: { entry: [10, 20, 40, 55, 100], exit: [5, 10, 20, 40] },
-  boll: { period: [10, 15, 20, 30, 50], k: [1.5, 2, 2.5, 3] },
-  macd: { fast: [5, 8, 12, 16], slow: [20, 26, 35, 50], signal: [5, 9, 12] },
-  hold: {},
-};
-function combos(grid) {
-  let out = [{}];
-  for (const [k, vs] of Object.entries(grid)) out = out.flatMap(o => vs.map(v => ({ ...o, [k]: v })));
-  return out;
-}
-function validParams(strategy, p) {
-  if (strategy === "sma") return p.short < p.long;
-  if (strategy === "rsi") return p.buy < p.sell;
-  if (strategy === "macd") return p.fast < p.slow;
-  return true;
-}
-// split（YYYY-MM-DD）までを前半、それより後を後半として、各組み合わせを別々に検証する
-export function sweep(cfgIn, data, { from = null, split }) {
-  const cfg = normalizeCfg(cfgIn);
-  const nextDay = d => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
-  const rows = [];
-  for (const params of combos(GRIDS[cfg.strategy] || {})) {
-    if (!validParams(cfg.strategy, params)) continue;
-    const c = { ...cfg, params };
-    const a = backtest(c, data, { from, to: split });
-    const b = backtest(c, data, { from: nextDay(split) });
-    if (!a.metrics || !b.metrics) continue;
-    rows.push({ params, inS: a.metrics, outS: b.metrics, benchIn: a.bench.metrics, benchOut: b.bench.metrics });
-  }
-  return rows.sort((x, y) => y.inS.totalPct - x.inS.totalPct);
-}

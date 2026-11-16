@@ -178,6 +178,21 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <p class="hint" id="btDesc"></p>
         </div>
         <div class="row grid3" id="btParams"></div>
+        <div class="row">
+          <label class="lab" for="btRgMode">相場フィルター（市況で売買を切り替える）</label>
+          <select id="btRgMode" class="in"><option value="off">使わない</option><option value="auto">指数で自動判定する</option></select>
+        </div>
+        <div id="btRgBox" class="hidden">
+          <div class="row grid2">
+            <div><label class="lab" for="btRgSym">指数（ETF）</label><input id="btRgSym" class="in" autocapitalize="characters" autocomplete="off"></div>
+            <div><label class="lab" for="btRgMa">移動平均（日）</label><input id="btRgMa" class="in num" inputmode="numeric" value="200"></div>
+          </div>
+          <div class="row">
+            <label class="lab" for="btRgAct">弱気のときの動き</label>
+            <select id="btRgAct" class="in"><option value="nobuy">新しく買わない（持ち株はそのまま）</option><option value="exit">持ち株も売って待つ</option><option value="half">買う量を半分にする</option></select>
+            <p class="hint" id="btRgHint"></p>
+          </div>
+        </div>
         <details class="more">
           <summary>細かい設定</summary>
           <div class="body">
