@@ -84,6 +84,10 @@ table.t th{font-size:11px;font-weight:500;color:var(--mu);text-align:right;paddi
 table.t td{text-align:right;padding:8px 4px;border-bottom:1px solid var(--soft);font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 table.t th:first-child,table.t td:first-child{text-align:left}
 table.t td.side-buy{color:var(--up)} table.t td.side-sell{color:var(--dn)}
+table.sw tr.r{cursor:pointer} table.sw tr.r:active{background:var(--soft)}
+table.sw td.p{font-family:inherit;font-size:12px;white-space:normal;line-height:1.4}
+.star{color:#c99a12}
+.swsum{font-size:13px;line-height:1.6;background:var(--soft);border-radius:10px;padding:10px 12px;margin:12px 0}
 .tscroll{overflow-x:auto;max-height:420px;overflow-y:auto}
 .empty{color:var(--mu);font-size:13px;text-align:center;padding:24px 8px;line-height:1.7}
 .err{color:var(--dn);font-size:13px;margin-top:10px;white-space:pre-wrap}
@@ -185,6 +189,10 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
               <div><label class="lab" for="btSl">損切り（%・0でなし）</label><input id="btSl" class="in num" inputmode="decimal" value="0"></div>
               <div><label class="lab" for="btTp">利確（%・0でなし）</label><input id="btTp" class="in num" inputmode="decimal" value="0"></div>
             </div>
+            <div class="row">
+              <label class="lab" for="btTrend">トレンド条件：終値が何日線より上のときだけ持つ（0でなし）</label>
+              <input id="btTrend" class="in num" inputmode="numeric" value="0" placeholder="例：200">
+            </div>
             <div class="row grid3">
               <div><label class="lab" for="btFee">手数料（%）</label><input id="btFee" class="in num" inputmode="decimal" value="0"></div>
               <div><label class="lab" for="btSlip">滑り（%）</label><input id="btSlip" class="in num" inputmode="decimal" value="0.1"></div>
@@ -208,6 +216,13 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <div class="legend"><span><i style="background:var(--ink)"></i>株価（調整後）</span><span style="color:var(--up)">▲ 買い</span><span style="color:var(--dn)">▼ 売り</span></div>
           <div class="chartwrap"><svg class="chart" id="btPxChart"></svg></div>
           <div id="btNotes"></div>
+          <button class="btn ghost" id="btNotion" style="margin-top:12px">Notionに保存</button>
+        </div>
+        <div class="card" id="swCard">
+          <h2>パラメータを総当たりで比べる</h2>
+          <p class="hint" style="margin:0 0 12px">いろいろな数値の組み合わせを一気に試します。期間を前半（7割）と後半（3割）に分け、前半で成績の良かった組み合わせが、後半でも通用するかを確かめます。前半だけ良いものは「過去に合わせすぎ」の可能性が高いです。</p>
+          <button class="btn ghost" id="swRun">総当たりで比べる</button>
+          <div id="swOut"></div>
         </div>
         <div class="card">
           <h2>取引の一覧 <span class="mu num" id="btTradeCount" style="font-size:12px;font-weight:400"></span></h2>
@@ -230,6 +245,13 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
 
     <!-- 設定 -->
     <div id="vSet" class="hidden">
+      <div class="card">
+        <h2>通知</h2>
+        <p class="hint" style="margin:0 0 12px">模擬取引で約定したとき、次の営業日の注文が出たとき、安全装置で止まったときに、この端末に通知します。iPhoneは、ホーム画面に追加したアプリから開いてオンにしてください。</p>
+        <div id="pushState" class="hint" style="margin:0 0 12px"></div>
+        <div class="btns"><button class="btn" id="pushOn">通知をオンにする</button><button class="btn ghost hidden" id="pushTest">テスト通知</button></div>
+        <button class="linkbtn hidden" id="pushOff">この端末の通知をオフにする</button>
+      </div>
       <div class="card">
         <h2>株価データの接続</h2>
         <div id="keyStatus"><div class="empty"><span class="spin"></span>確認中…</div></div>

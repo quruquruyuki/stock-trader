@@ -27,6 +27,23 @@ export const STRATEGIES = {
       { key: "exit", label: "売り：安値（日）", def: 10, min: 2, max: 300 },
     ],
   },
+  boll: {
+    label: "ボリンジャー逆張り",
+    desc: "終値がボリンジャーバンドの下限（平均−σ×倍率）を割ったら買い、平均線まで戻ったら売り。",
+    params: [
+      { key: "period", label: "期間（日）", def: 20, min: 5, max: 200 },
+      { key: "k", label: "倍率（σ）", def: 2, min: 0.5, max: 4, step: 0.1 },
+    ],
+  },
+  macd: {
+    label: "MACDクロス",
+    desc: "MACD（短期EMA−長期EMA）がシグナル線を上回ったら買い、下回ったら売り。",
+    params: [
+      { key: "fast", label: "短期EMA", def: 12, min: 2, max: 100 },
+      { key: "slow", label: "長期EMA", def: 26, min: 3, max: 300 },
+      { key: "signal", label: "シグナル", def: 9, min: 2, max: 100 },
+    ],
+  },
   hold: {
     label: "買って持ち続ける",
     desc: "最初に買って、そのまま持ち続ける（比較用）。",
@@ -48,6 +65,7 @@ export const DEFAULT_CFG = {
   maxTradesPerDay: 4,  // 1日の約定回数の上限
   maxDailyLossPct: 5,  // 1日でこれ以上資産が減ったら停止（%）
   maxDrawdownPct: 20,  // 最高値からこれ以上資産が減ったら停止（%）
+  trendMa: 0,          // トレンド条件：終値がこの日数の移動平均より上のときだけ持つ（0=使わない）
 };
 
 export function normalizeCfg(c) {
@@ -56,7 +74,9 @@ export function normalizeCfg(c) {
   const params = {};
   for (const p of STRATEGIES[st].params) {
     const v = Number(cfg.params?.[p.key]);
-    params[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, Math.round(v))) : p.def;
+    const step = p.step || 1;
+    params[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, Math.round(v / step) * step)) : p.def;
+    if (p.step) params[p.key] = Number(params[p.key].toFixed(4));
   }
   const num = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
   return {
@@ -73,6 +93,7 @@ export function normalizeCfg(c) {
     maxTradesPerDay: Math.round(num(cfg.maxTradesPerDay, 1, 100, 4)),
     maxDailyLossPct: num(cfg.maxDailyLossPct, 0, 100, 5),
     maxDrawdownPct: num(cfg.maxDrawdownPct, 0, 100, 20),
+    trendMa: Math.round(num(cfg.trendMa, 0, 400, 0)),
   };
 }
 
@@ -99,10 +120,51 @@ function rsiArr(c, n) {
   return out;
 }
 
+function emaArr(a, n) {
+  const out = new Array(a.length).fill(null), k = 2 / (n + 1);
+  let e = null;
+  for (let i = 0; i < a.length; i++) {
+    if (i === n - 1) { let s = 0; for (let j = 0; j < n; j++) s += a[j]; e = s / n; }
+    else if (i >= n) e = a[i] * k + e * (1 - k);
+    out[i] = e;
+  }
+  return out;
+}
+
 // 各日の「持ちたいか（1）／持ちたくないか（0）」。その日までのデータだけで判定する
-export function signals(bars, strategy, p) {
+// cfg.trendMa があれば、終値がその移動平均より上のときだけ持つ
+export function signals(bars, strategy, p, trendMa = 0) {
+  const raw = rawSignals(bars, strategy, p);
+  if (!trendMa) return raw;
+  const t = smaArr(bars.map(b => b.c), trendMa);
+  return raw.map((v, i) => v && t[i] != null && bars[i].c > t[i] ? 1 : 0);
+}
+
+function rawSignals(bars, strategy, p) {
   const n = bars.length, c = bars.map(b => b.c), out = new Array(n).fill(0);
   if (strategy === "hold") return out.fill(1);
+  if (strategy === "boll") {
+    const m = smaArr(c, p.period);
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (m[i] != null) {
+        let v = 0; for (let k = i - p.period + 1; k <= i; k++) v += (c[k] - m[i]) ** 2;
+        const lower = m[i] - p.k * Math.sqrt(v / p.period);
+        if (!pos && c[i] < lower) pos = 1; else if (pos && c[i] >= m[i]) pos = 0;
+      }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "macd") {
+    const f = emaArr(c, p.fast), sl = emaArr(c, p.slow);
+    const macd = c.map((_, i) => f[i] != null && sl[i] != null ? f[i] - sl[i] : null);
+    const start = macd.findIndex(v => v != null);
+    const sig = new Array(n).fill(null);
+    if (start >= 0) { const e = emaArr(macd.slice(start), p.signal); for (let i = 0; i < e.length; i++) sig[start + i] = e[i]; }
+    for (let i = 0; i < n; i++) out[i] = macd[i] != null && sig[i] != null && macd[i] > sig[i] ? 1 : 0;
+    return out;
+  }
   if (strategy === "sma") {
     const s = smaArr(c, p.short), l = smaArr(c, p.long);
     for (let i = 0; i < n; i++) out[i] = s[i] != null && l[i] != null && s[i] > l[i] ? 1 : 0;
@@ -155,7 +217,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   const idx = {}, sig = {};
   for (const s of syms) {
     idx[s] = new Map(data[s].map((b, i) => [b.d, i]));
-    sig[s] = signals(data[s], cfg.strategy, cfg.params);
+    sig[s] = signals(data[s], cfg.strategy, cfg.params, cfg.trendMa);
   }
   const dates = [...new Set(syms.flatMap(s => data[s].map(b => b.d)))]
     .filter(d => (!st.lastDate || d > st.lastDate) && (!opts.toDate || d <= opts.toDate)).sort();
@@ -240,7 +302,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
 }
 
 /* ---------- バックテスト ---------- */
-// opts.from（YYYY-MM-DD）より前のデータは、シグナル計算の助走にだけ使う
+// opts.from（YYYY-MM-DD）より前のデータは、シグナル計算の助走にだけ使う。opts.to までで止める
 export function backtest(cfgIn, data, opts = {}) {
   const cfg = normalizeCfg(cfgIn);
   const start = () => {
@@ -248,8 +310,9 @@ export function backtest(cfgIn, data, opts = {}) {
     if (opts.from) { const d = new Date(opts.from + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 1); st.lastDate = d.toISOString().slice(0, 10); }
     return st;
   };
-  const main = runDays(cfg, start(), data, { applyHalts: false });
-  const bench = runDays({ ...cfg, strategy: "hold", params: {}, slPct: 0, tpPct: 0, maxTradesPerDay: 100 }, start(), data, { applyHalts: false });
+  const o = { applyHalts: false, toDate: opts.to || null };
+  const main = runDays(cfg, start(), data, o);
+  const bench = runDays({ ...cfg, strategy: "hold", params: {}, slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0 }, start(), data, o);
   return { cfg, ...main, metrics: metrics(main.equity, main.trades, cfg.initialCash), bench: { equity: bench.equity, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
 }
 
@@ -281,4 +344,41 @@ export function metrics(equity, trades, initial) {
     winPct: sells.length ? wins / sells.length * 100 : null,
     fees: trades.reduce((a, t) => a + (t.fee || 0), 0),
   };
+}
+
+/* ---------- パラメータの総当たり ---------- */
+// 戦略ごとの候補。前半（学習期間）で成績を出し、後半（確認期間）でも通用するかを見る
+export const GRIDS = {
+  sma: { short: [3, 5, 10, 15, 20, 25], long: [20, 25, 50, 75, 100, 150, 200] },
+  rsi: { period: [7, 10, 14, 21], buy: [20, 25, 30, 35], sell: [60, 65, 70, 75, 80] },
+  breakout: { entry: [10, 20, 40, 55, 100], exit: [5, 10, 20, 40] },
+  boll: { period: [10, 15, 20, 30, 50], k: [1.5, 2, 2.5, 3] },
+  macd: { fast: [5, 8, 12, 16], slow: [20, 26, 35, 50], signal: [5, 9, 12] },
+  hold: {},
+};
+function combos(grid) {
+  let out = [{}];
+  for (const [k, vs] of Object.entries(grid)) out = out.flatMap(o => vs.map(v => ({ ...o, [k]: v })));
+  return out;
+}
+function validParams(strategy, p) {
+  if (strategy === "sma") return p.short < p.long;
+  if (strategy === "rsi") return p.buy < p.sell;
+  if (strategy === "macd") return p.fast < p.slow;
+  return true;
+}
+// split（YYYY-MM-DD）までを前半、それより後を後半として、各組み合わせを別々に検証する
+export function sweep(cfgIn, data, { from = null, split }) {
+  const cfg = normalizeCfg(cfgIn);
+  const nextDay = d => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
+  const rows = [];
+  for (const params of combos(GRIDS[cfg.strategy] || {})) {
+    if (!validParams(cfg.strategy, params)) continue;
+    const c = { ...cfg, params };
+    const a = backtest(c, data, { from, to: split });
+    const b = backtest(c, data, { from: nextDay(split) });
+    if (!a.metrics || !b.metrics) continue;
+    rows.push({ params, inS: a.metrics, outS: b.metrics, benchIn: a.bench.metrics, benchOut: b.bench.metrics });
+  }
+  return rows.sort((x, y) => y.inS.totalPct - x.inS.totalPct);
 }

@@ -1,4 +1,4 @@
-const CACHE = "st-v3";
+const CACHE = "st-v4";
 const SHELL = ["./", "index.html", "app.js", "engine.js", "config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {
@@ -16,4 +16,22 @@ self.addEventListener("fetch", e => {
     return;
   }
   e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(res => { const c = res.clone(); caches.open(CACHE).then(ca => ca.put(e.request, c)); return res; })));
+});
+
+// プッシュ通知（模擬取引の約定・注文・停止）
+self.addEventListener("push", e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "株ラボ", {
+    body: d.body || "", tag: d.tag || "st", renotify: true,
+    icon: "icons/icon-192.png", badge: "icons/icon-192.png", data: { url: d.url || "./" },
+  }));
+});
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || "./", self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(cs => {
+    for (const c of cs) if (c.url.startsWith(self.registration.scope)) { c.navigate(url).catch(() => {}); return c.focus(); }
+    return self.clients.openWindow(url);
+  }));
 });

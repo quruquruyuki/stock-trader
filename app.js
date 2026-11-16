@@ -1,5 +1,5 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { STRATEGIES, backtest, normalizeCfg } from "./engine.js";
+import { STRATEGIES, GRIDS, backtest, sweep, normalizeCfg } from "./engine.js";
 
 const CFG = window.ST_CONFIG;
 const sb = createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -141,7 +141,8 @@ function setMarket(m) {
 function renderParams() {
   const st = STRATEGIES[$("btStrategy").value];
   $("btDesc").textContent = st.desc;
-  $("btParams").innerHTML = st.params.map(p => `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="numeric" value="${p.def}"></div>`).join("");
+  $("btParams").innerHTML = st.params.map(p => `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="${p.step ? "decimal" : "numeric"}" value="${p.def}"></div>`).join("");
+  $("swCard") && $("swCard").classList.toggle("hidden", !Object.keys(GRIDS[$("btStrategy").value] || {}).length);
   $("btParams").classList.toggle("hidden", !st.params.length);
 }
 function readCfg() {
@@ -151,7 +152,7 @@ function readCfg() {
   return normalizeCfg({
     strategy, params, symbols: parseSyms($("btSymbols").value),
     initialCash: n("btCash"), lot: n("btLot"), slPct: n("btSl"), tpPct: n("btTp"),
-    feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"),
+    feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
   });
 }
 const isoAgo = days => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); };
@@ -174,6 +175,7 @@ $("btRun").onclick = async () => {
   $("btErr").textContent = "";
   if (!cfg.symbols.length) { $("btErr").textContent = "銘柄を入れてください"; return; }
   if (cfg.strategy === "sma" && cfg.params.short >= cfg.params.long) { $("btErr").textContent = "移動平均は「短期」を「長期」より小さくしてください"; return; }
+  if (cfg.strategy === "macd" && cfg.params.fast >= cfg.params.slow) { $("btErr").textContent = "MACDは「短期EMA」を「長期EMA」より小さくしてください"; return; }
   busy($("btRun"), true, "株価を取得して計算中…");
   try {
     const start = period ? isoAgo(Math.round(period * 365.25)) : null;
@@ -184,7 +186,8 @@ $("btRun").onclick = async () => {
     if (!ok.length) throw new Error(errText || "株価が取得できませんでした");
     const res = backtest({ ...cfg, symbols: ok }, data, { from: start });
     if (!res.equity.length) throw new Error("この期間のデータがありません。期間を「全部」にして試してください");
-    lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period };
+    lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period, start, sweepRows: null };
+    $("swOut").innerHTML = "";
     renderBT(errText);
     $("btOut").classList.remove("hidden");
     $("btOut").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -237,6 +240,133 @@ function tradeTable(trades, m) {
     <td>${t.qty.toLocaleString()}</td><td>${price(t.price, m)}</td><td class="${cls(t.pnl)}">${t.pnl == null ? "" : money(t.pnl, m)}</td></tr>`).join("");
 }
 
+const paramText = cfg => {
+  const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
+  return `${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}`;
+};
+const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
+
+/* ---------- 総当たり ---------- */
+$("swRun").onclick = async () => {
+  if (!lastBT) return;
+  const { cfg, data, res, start } = lastBT;
+  const dates = res.equity.map(e => e.d);
+  if (dates.length < 120) { $("swOut").innerHTML = `<div class="err">期間が短すぎます。もっと長い期間で検証してください</div>`; return; }
+  const split = dates[Math.floor(dates.length * 0.7)];
+  busy($("swRun"), true, "計算中…");
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const rows = sweep(cfg, data, { from: start || dates[0], split });
+    lastBT.sweepRows = rows; lastBT.split = split;
+    renderSweep();
+  } catch (e) { $("swOut").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { busy($("swRun"), false); }
+};
+function renderSweep() {
+  const { cfg, sweepRows: rows, split, res } = lastBT;
+  if (!rows?.length) { $("swOut").innerHTML = `<div class="empty">結果がありません</div>`; return; }
+  const beat = r => r.outS.totalPct > r.benchOut.totalPct;
+  const top = rows.slice(0, 15), top5 = rows.slice(0, 5);
+  const nBeat = top5.filter(beat).length;
+  const bestOut = rows.slice().sort((a, b) => b.outS.totalPct - a.outS.totalPct)[0];
+  $("swOut").innerHTML = `
+    <div class="swsum">${rows.length}通りを検証。前半 <span class="num">${fmtD(res.equity[0].d)}〜${fmtD(split)}</span>／後半 <span class="num">${fmtD(split)}〜${fmtD(res.equity[res.equity.length - 1].d)}</span><br>
+    前半の上位5つのうち、後半も買い持ち（<span class="num ${cls(rows[0].benchOut.totalPct)}">${pct(rows[0].benchOut.totalPct)}</span>）を上回ったのは <b>${nBeat}つ</b>。
+    ${nBeat >= 3 ? "前半の良さが後半にもある程度続いています。" : nBeat >= 1 ? "後半で崩れたものも多く、過信は禁物です。" : "前半の上位は後半でふるいませんでした。過去に合わせすぎている可能性が高いです。"}
+    <br>後半だけで一番良かったのは <b>${esc(shortParams(cfg.strategy, bestOut.params))}</b>（<span class="num ${cls(bestOut.outS.totalPct)}">${pct(bestOut.outS.totalPct)}</span>）</div>
+    <div class="tscroll"><table class="t sw"><tr><th>組み合わせ（前半の成績順）</th><th>前半</th><th>後半</th><th>後半の下落</th></tr>
+    ${top.map((r, i) => `<tr class="r" data-i="${i}"><td class="p">${beat(r) ? `<span class="star">★</span>` : ""}${esc(shortParams(cfg.strategy, r.params))}</td>
+      <td class="${cls(r.inS.totalPct)}">${pct(r.inS.totalPct)}</td><td class="${cls(r.outS.totalPct)}">${pct(r.outS.totalPct)}</td><td>-${r.outS.maxDDPct.toFixed(1)}%</td></tr>`).join("")}
+    </table></div>
+    <p class="hint">★は後半も買い持ちを上回ったもの。行をタップすると、その数値をフォームに入れて検証し直します。</p>`;
+  $("swOut").querySelectorAll("tr.r").forEach(tr => tr.onclick = () => {
+    const p = top[Number(tr.dataset.i)].params;
+    for (const [k, v] of Object.entries(p)) { const el = $("bp_" + k); if (el) el.value = v; }
+    $("btRun").click();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+}
+
+/* ---------- Notion に保存 ---------- */
+$("btNotion").onclick = async () => {
+  if (!lastBT) return;
+  const { market: m, cfg, res, sweepRows, split } = lastBT, M = res.metrics, B = res.bench.metrics;
+  const first = res.equity[0].d, last = res.equity[res.equity.length - 1].d;
+  const syms = cfg.symbols.map(s => symLabel(m, s)).join("、");
+  const page = {
+    title: `バックテスト：${STRATEGIES[cfg.strategy].label}（${cfg.symbols.join("・")}）`,
+    genre: "株・投資",
+    summary: `${m === "JP" ? "日本株" : "米国株"} ${syms}。${paramText(cfg)}。${fmtD(first)}〜${fmtD(last)}で損益${pct(M.totalPct)}（年率${pct(M.cagrPct)}）、最大下落-${M.maxDDPct.toFixed(1)}%。買って持ち続けた場合は${pct(B.totalPct)}。`,
+    sections: [
+      { type: "h", text: "設定" },
+      { type: "bullets", items: [
+        `市場：${m === "JP" ? "日本株" : "米国株"}`, `銘柄：${syms}`, `戦略：${paramText(cfg)}`, `期間：${fmtD(first)}〜${fmtD(last)}`,
+        `初期資金：${money(cfg.initialCash, m)}／売買単位：${cfg.lot}株`,
+        `損切り：${cfg.slPct ? cfg.slPct + "%" : "なし"}／利確：${cfg.tpPct ? cfg.tpPct + "%" : "なし"}／手数料：${cfg.feePct}%／滑り：${cfg.slipPct}%`,
+        "約定：終値で判定し翌営業日の始値で約定（株ラボで計算）",
+      ] },
+      { type: "h", text: "成績" },
+      { type: "table", rows: [["", "この戦略", "買って持ち続けた場合"],
+        ["最終資産", money(M.final, m), money(B.final, m)], ["損益", pct(M.totalPct), pct(B.totalPct)], ["年率", pct(M.cagrPct), pct(B.cagrPct)],
+        ["最大下落", "-" + M.maxDDPct.toFixed(1) + "%", "-" + B.maxDDPct.toFixed(1) + "%"], ["シャープ", M.sharpe.toFixed(2), B.sharpe.toFixed(2)],
+        ["取引回数", M.trades + "回", B.trades + "回"], ["勝率", M.winPct == null ? "—" : M.winPct.toFixed(0) + "%", "—"]] },
+      { type: "h", text: "直近の取引（20件）" },
+      { type: "table", rows: [["日付", "銘柄", "売買", "株数", "約定値", "損益"], ...res.trades.slice(-20).reverse().map(t => [fmtD(t.d), t.symbol, t.side === "buy" ? "買" : "売", String(t.qty), price(t.price, m), t.pnl == null ? "" : money(t.pnl, m)])] },
+      ...(sweepRows?.length ? [
+        { type: "h", text: `総当たり（前半〜${fmtD(split)}の成績順・上位10）` },
+        { type: "table", rows: [["組み合わせ", "前半", "後半", "後半の下落"], ...sweepRows.slice(0, 10).map(r => [shortParams(cfg.strategy, r.params), pct(r.inS.totalPct), pct(r.outS.totalPct), "-" + r.outS.maxDDPct.toFixed(1) + "%"])] },
+      ] : []),
+    ],
+  };
+  busy($("btNotion"), true, "保存中…");
+  try { const r = await call("notion_save", { page }); toast("Notionに保存しました"); if (r.url) $("btNotion").dataset.url = r.url; }
+  catch (e) { toast(e.message); }
+  finally { busy($("btNotion"), false); }
+};
+
+/* ---------- 通知 ---------- */
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+function u8(b64) { const p = "=".repeat((4 - b64.length % 4) % 4); const s = atob((b64 + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, c => c.charCodeAt(0)); }
+async function pushRefresh() {
+  const st = $("pushState");
+  if (!pushSupported()) {
+    st.textContent = isIOS && !standalone() ? "iPhoneでは、Safariの共有ボタン →「ホーム画面に追加」で追加したアプリから開くと、通知をオンにできます。" : "この端末・ブラウザは通知に対応していません。";
+    $("pushOn").classList.add("hidden"); $("pushTest").classList.add("hidden"); $("pushOff").classList.add("hidden"); return;
+  }
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  const on = !!sub && Notification.permission === "granted";
+  st.innerHTML = on ? `<span class="ok">この端末で通知オン</span>` : Notification.permission === "denied" ? `<span class="ng">通知が拒否されています。端末の設定から株ラボの通知を許可してください。</span>` : "この端末の通知はオフです。";
+  $("pushOn").classList.toggle("hidden", on); $("pushTest").classList.toggle("hidden", !on); $("pushOff").classList.toggle("hidden", !on);
+}
+$("pushOn").onclick = async () => {
+  busy($("pushOn"), true, "設定中…");
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error("通知が許可されませんでした");
+    const { key } = await call("push_key");
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options?.applicationServerKey && btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") !== key) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8(key) });
+    await call("push_subscribe", { sub: sub.toJSON(), ua: navigator.userAgent });
+    toast("通知をオンにしました");
+  } catch (e) { toast(e.message); }
+  finally { busy($("pushOn"), false); pushRefresh(); }
+};
+$("pushTest").onclick = async () => {
+  busy($("pushTest"), true, "送信中…");
+  try { await call("push_test"); toast("テスト通知を送りました"); } catch (e) { toast(e.message); }
+  finally { busy($("pushTest"), false); }
+};
+$("pushOff").onclick = async () => {
+  const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription();
+  if (sub) { try { await call("push_unsubscribe", { endpoint: sub.endpoint }); } catch {} await sub.unsubscribe(); }
+  toast("この端末の通知をオフにしました"); pushRefresh();
+};
+
 /* ---------- 模擬取引を始める ---------- */
 $("btToPaper").onclick = () => {
   if (!lastBT) return;
@@ -244,8 +374,7 @@ $("btToPaper").onclick = () => {
   $("nbName").value = `${STRATEGIES[cfg.strategy].label}（${cfg.symbols.join("・")}）`.slice(0, 40);
   $("nbCashLab").textContent = m === "JP" ? "仮想の資金（円）" : "仮想の資金（ドル）";
   $("nbCash").value = String(cfg.initialCash);
-  const ps = STRATEGIES[cfg.strategy].params.map(p => `${p.label.replace(/（.*）/, "")}${cfg.params[p.key]}`).join("・");
-  $("nbSummary").textContent = `${m === "JP" ? "日本株" : "米国株"}／${STRATEGIES[cfg.strategy].label}${ps ? "（" + ps + "）" : ""}／${cfg.symbols.map(s => symLabel(m, s)).join("、")}`
+  $("nbSummary").textContent = `${m === "JP" ? "日本株" : "米国株"}／${paramText(cfg)}／${cfg.symbols.map(s => symLabel(m, s)).join("、")}`
     + (cfg.slPct ? `／損切り${cfg.slPct}%` : "") + (cfg.tpPct ? `／利確${cfg.tpPct}%` : "");
   $("nbErr").textContent = "";
   $("newBot").classList.remove("hidden");
@@ -348,7 +477,7 @@ async function openBot(id) {
     </div>
     <div class="card"><h2>取引履歴</h2><div class="tscroll"><table class="t">${tradeTable(trRes.data || [], m)}</table></div></div>
     <div class="card"><h2>設定</h2>
-      <p class="hint" style="margin:0;line-height:1.8">${m === "JP" ? "日本株" : "米国株"}／${esc(STRATEGIES[cfg.strategy]?.label)}${ps ? "（" + esc(ps) + "）" : ""}<br>
+      <p class="hint" style="margin:0;line-height:1.8">${m === "JP" ? "日本株" : "米国株"}／${esc(paramText(cfg))}<br>
       銘柄：${cfg.symbols.map(s => esc(symLabel(m, s))).join("、")}<br>
       売買単位 ${cfg.lot}株／損切り ${cfg.slPct || "なし"}${cfg.slPct ? "%" : ""}／利確 ${cfg.tpPct || "なし"}${cfg.tpPct ? "%" : ""}／手数料 ${cfg.feePct}%／滑り ${cfg.slipPct}%<br>
       安全装置：1日${cfg.maxTradesPerDay}回まで・1日${cfg.maxDailyLossPct}%の損失で停止・最高値から${cfg.maxDrawdownPct}%下落で停止<br>
@@ -380,7 +509,7 @@ async function loadStatus() {
   try {
     const s = await call("status");
     const row = (label, ok) => `<div class="keyrow"><span>${label}</span><span class="${ok ? "ok" : "ng"}">${ok ? "接続済み" : "未設定"}</span></div>`;
-    $("keyStatus").innerHTML = row("日本株（J-Quants）", s.jquants) + row("米国株（Tiingo）", s.tiingo)
+    $("keyStatus").innerHTML = row("日本株（J-Quants）", s.jquants) + row("米国株（Tiingo）", s.tiingo) + row("Notion", s.notion)
       + (!s.jquants || !s.tiingo ? `<p class="hint">未設定のものは、下の手順でAPIキーを登録してください。登録後すぐに使えます。</p>` : "");
   } catch (e) { $("keyStatus").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
@@ -390,7 +519,7 @@ function switchView(v) {
   ["vBT", "vPaper", "vSet"].forEach(x => $(x).classList.toggle("hidden", x !== v));
   [...$("tabs").children].forEach(b => b.classList.toggle("on", b.dataset.v === v));
   if (v === "vPaper") loadBots();
-  if (v === "vSet") loadStatus();
+  if (v === "vSet") { loadStatus(); pushRefresh().catch(() => {}); }
   window.scrollTo(0, 0);
 }
 $("tabs").addEventListener("click", e => { const b = e.target.closest("button"); if (b) switchView(b.dataset.v); });
@@ -413,7 +542,7 @@ sb.auth.onAuthStateChange((_ev, session) => {
   $("auth").classList.toggle("hidden", !!user);
   $("app").classList.toggle("hidden", !user);
   $("tabs").classList.toggle("hidden", !user);
-  if (user) $("whoami").textContent = `${user.email} でログイン中`;
+  if (user) { $("whoami").textContent = `${user.email} でログイン中`; if (location.hash === "#paper") switchView("vPaper"); }
 });
 
 /* ---------- 初期化 ---------- */

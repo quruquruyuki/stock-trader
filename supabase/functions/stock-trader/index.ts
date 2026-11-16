@@ -6,9 +6,13 @@
 //   JQUANTS_API_KEY  … J-Quants の APIキー（日本株）
 //   TIINGO_API_KEY   … Tiingo の APIトークン（米国株）
 //   ALLOWED_EMAIL    … このアプリを使えるログイン用メールアドレス（他のアプリと共用）
+//   NOTION_API_KEY   … 結果を Notion に保存するとき（他のアプリと共用）
+// プッシュ通知の鍵（VAPID）は初回に自動で作って st_config に保存する
 // 毎日の自動実行（pg_cron）からの呼び出しは、st_config テーブルの cron_key（画面からは読めない）で確かめる
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { initialState, normalizeCfg, runDays, STRATEGIES } from "./engine.js";
+import { generateVapid, sendPush, type Vapid } from "./push.ts";
+import { saveToNotion } from "./notion.ts";
 
 const norm = (k: string) => k.toUpperCase().replace(/[^A-Z0-9]/g, "");
 function env(name: string, ...aliases: string[]): string {
@@ -21,6 +25,7 @@ function env(name: string, ...aliases: string[]): string {
 const JQUANTS_API_KEY = env("JQUANTS_API_KEY", "JQUANTS_KEY", "J_QUANTS_API_KEY");
 const TIINGO_API_KEY = env("TIINGO_API_KEY", "TIINGO_KEY", "TIINGO_TOKEN");
 const ALLOWED_EMAIL = env("ALLOWED_EMAIL").toLowerCase();
+const NOTION_API_KEY = env("NOTION_API_KEY", "NOTION_KEY", "NOTION_TOKEN");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const db = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", { auth: { persistSession: false } });
@@ -180,6 +185,44 @@ async function createBot(userId: string, body: any) {
   return fresh;
 }
 
+/* ---------- プッシュ通知 ---------- */
+let vapidCache: Vapid | null = null;
+async function vapid(): Promise<Vapid> {
+  if (vapidCache) return vapidCache;
+  const { data } = await db.from("st_config").select("value").eq("key", "vapid").maybeSingle();
+  if (data?.value) return (vapidCache = JSON.parse(data.value));
+  const v = await generateVapid();
+  await db.from("st_config").insert({ key: "vapid", value: JSON.stringify(v) });
+  // 同時に作られた場合に備えて、保存されたほうを使う
+  const { data: again } = await db.from("st_config").select("value").eq("key", "vapid").single();
+  return (vapidCache = JSON.parse(again!.value));
+}
+async function notify(userId: string, msg: { title: string; body: string; tag?: string; url?: string }) {
+  const { data: subs } = await db.from("st_push_subs").select("*").eq("user_id", userId);
+  if (!subs?.length) return 0;
+  const v = await vapid();
+  let sent = 0;
+  for (const s of subs) {
+    try {
+      const r = await sendPush(s, msg, v, ALLOWED_EMAIL ? `mailto:${ALLOWED_EMAIL}` : undefined);
+      if (r === "ok") sent++;
+      else if (r === "gone") await db.from("st_push_subs").delete().eq("id", s.id);
+      else console.error("push", r);
+    } catch (e) { console.error("push", e); }
+  }
+  return sent;
+}
+const fmtNum = (v: number, m: string) => m === "US" ? v.toFixed(2) : Math.round(v).toLocaleString("ja-JP");
+function runSummary(bot: any, r: any): string | null {
+  const lines: string[] = [];
+  for (const t of r.trades.slice(-4)) lines.push(`${t.side === "buy" ? "買" : "売"} ${t.symbol} ${t.qty}株 @${fmtNum(t.price, bot.market)}${t.pnl != null ? `（${t.pnl >= 0 ? "+" : ""}${fmtNum(t.pnl, bot.market)}）` : ""}`);
+  if (r.trades.length > 4) lines.unshift(`約定${r.trades.length}件（最新4件）`);
+  const fresh = (r.state.pending ?? []).filter((o: any) => o.signalDate === r.state.lastDate);
+  for (const o of fresh.slice(0, 3)) lines.push(`次の営業日に${o.side === "buy" ? "買い" : "売り"}：${o.symbol}（${o.reason}）`);
+  if (r.state.halted && !bot.state.halted) lines.push(`安全装置で停止：${r.state.haltReason}`);
+  return lines.length ? lines.join("\n") : null;
+}
+
 async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
   const cfg = normalizeCfg(bot.cfg);
   let data = preloaded;
@@ -209,6 +252,8 @@ async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
   const update: Record<string, unknown> = { state: r.state, last_run_at: new Date().toISOString(), last_message: msgs.join("\n").slice(0, 1000) };
   if (r.state.halted) { update.active = false; update.halted_reason = r.state.haltReason; }
   await db.from("st_bots").update(update).eq("id", bot.id);
+  const summary = runSummary(bot, r);
+  if (summary) { try { await notify(bot.user_id, { title: `株ラボ｜${bot.name}`, body: summary, tag: `bot-${bot.id}`, url: "./#paper" }); } catch (e) { console.error(e); } }
   return { processed: days, trades: r.trades.length, halted: r.state.halted };
 }
 
@@ -258,7 +303,32 @@ Deno.serve(async (req) => {
     const user = await requireUser(req);
     switch (body.action) {
       case "status":
-        return json({ jquants: !!JQUANTS_API_KEY, tiingo: !!TIINGO_API_KEY });
+        return json({ jquants: !!JQUANTS_API_KEY, tiingo: !!TIINGO_API_KEY, notion: !!NOTION_API_KEY });
+      case "push_key":
+        return json({ key: (await vapid()).publicKey });
+      case "push_subscribe": {
+        const sub = body.sub ?? {};
+        const endpoint = String(sub.endpoint ?? ""), p256dh = String(sub.keys?.p256dh ?? ""), auth = String(sub.keys?.auth ?? "");
+        if (!/^https:\/\//.test(endpoint) || !p256dh || !auth) throw new HttpError(400, "通知の登録情報が正しくありません");
+        const { error } = await db.from("st_push_subs").upsert({ user_id: user.id, endpoint, p256dh, auth, ua: String(body.ua ?? "").slice(0, 200) }, { onConflict: "endpoint" });
+        if (error) throw new HttpError(500, error.message);
+        return json({ ok: true });
+      }
+      case "push_unsubscribe":
+        await db.from("st_push_subs").delete().eq("user_id", user.id).eq("endpoint", String(body.endpoint ?? ""));
+        return json({ ok: true });
+      case "push_test": {
+        const sent = await notify(user.id, { title: "株ラボ", body: "通知のテストです。模擬取引で約定したときや、安全装置で止まったときにお知らせします。", tag: "test", url: "./" });
+        if (!sent) throw new HttpError(400, "通知を送れる端末がありません。この端末で通知をオンにしてください");
+        return json({ sent });
+      }
+      case "notion_save": {
+        if (!NOTION_API_KEY) throw new HttpError(400, "NOTION_API_KEY が未設定です");
+        const pg = body.page ?? {};
+        if (!pg.title) throw new HttpError(400, "保存する内容がありません");
+        const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+        return json(await saveToNotion(NOTION_API_KEY, { title: String(pg.title), genre: String(pg.genre ?? "株・投資"), summary: String(pg.summary ?? ""), date: today, sections: Array.isArray(pg.sections) ? pg.sections : [] }));
+      }
       case "bars": {
         const market: Market = body.market === "US" ? "US" : "JP";
         return json(await bars(market, Array.isArray(body.symbols) ? body.symbols : [], body.from ?? null, !!body.force));

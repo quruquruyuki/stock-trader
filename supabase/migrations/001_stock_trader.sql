@@ -86,3 +86,19 @@ grant delete on public.st_bots to authenticated;
 -- 毎営業日の引け後に模擬取引を進める（日本株 18:10 JST、米国株 翌朝 8:10 JST）
 select cron.schedule('stock-trader-jp-close', '10 9 * * 1-5', $$select net.http_post(url := 'https://oqtyorwlrnrcyjxiassg.supabase.co/functions/v1/stock-trader', body := '{"action":"run_all"}'::jsonb, headers := jsonb_build_object('Content-Type','application/json','x-cron-key',(select value from public.st_config where key='cron_key')), timeout_milliseconds := 300000)$$);
 select cron.schedule('stock-trader-us-close', '10 23 * * 1-5', $$select net.http_post(url := 'https://oqtyorwlrnrcyjxiassg.supabase.co/functions/v1/stock-trader', body := '{"action":"run_all"}'::jsonb, headers := jsonb_build_object('Content-Type','application/json','x-cron-key',(select value from public.st_config where key='cron_key')), timeout_milliseconds := 300000)$$);
+
+-- プッシュ通知の購読（端末ごと）。書き込みは Edge Function だけ
+create table if not exists public.st_push_subs (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  ua text,
+  created_at timestamptz not null default now()
+);
+create index if not exists st_push_subs_user on public.st_push_subs(user_id);
+alter table public.st_push_subs enable row level security;
+create policy "st_push_subs own select" on public.st_push_subs for select to authenticated using ((select auth.uid()) = user_id);
+grant select, insert, update, delete on public.st_push_subs to service_role;
+grant select on public.st_push_subs to authenticated;
