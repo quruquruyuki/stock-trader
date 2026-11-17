@@ -102,9 +102,9 @@ async function fetchUS(ticker: string, from: string | null): Promise<{ bars: Bar
 }
 
 // 恐怖指数。VIX は Cboe の公開CSV（だめなら FRED）、日経平均VI は日経平均プロフィルの公開CSV
-const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI", FF: "米国の政策金利（FF金利）", JPR: "日本の短期金利（コール翌日物・月次）", USDJPY: "ドル円", US10Y: "米国の10年金利", T10Y2Y: "米国の長短金利差（10年−2年）", WTI: "原油（WTI）", BEI: "米国の期待インフレ率（10年）", UNRATE: "米国の失業率（月次）" };
+const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI", FF: "米国の政策金利（FF金利）", JPR: "日本の短期金利（コール翌日物・月次）", USDJPY: "ドル円", US10Y: "米国の10年金利", T10Y2Y: "米国の長短金利差（10年−2年）", WTI: "原油（WTI）", BEI: "米国の期待インフレ率（10年）", UNRATE: "米国の失業率（月次）", N225: "日経平均株価（終値）" };
 // FRED の公開CSV（キー不要）。金利は 0 やマイナスもあるので、数値ならそのまま使う
-const FRED_ID: Record<string, string> = { FF: "DFF", JPR: "IRSTCI01JPM156N", USDJPY: "DEXJPUS", US10Y: "DGS10", T10Y2Y: "T10Y2Y", WTI: "DCOILWTICO", BEI: "T10YIE", UNRATE: "UNRATE" };
+const FRED_ID: Record<string, string> = { FF: "DFF", JPR: "IRSTCI01JPM156N", USDJPY: "DEXJPUS", US10Y: "DGS10", T10Y2Y: "T10Y2Y", WTI: "DCOILWTICO", BEI: "T10YIE", UNRATE: "UNRATE", N225: "NIKKEI225" };
 async function fredSeries(id: string): Promise<Bar[]> {
   const out: Bar[] = [];
   for (const line of (await getText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}`)).split(/\r?\n/)) {
@@ -212,7 +212,7 @@ const lookbackFrom = (lastDate: string | null) => {
 };
 
 // 設定を整える。相場フィルターの各条件のデータ名を確かめ、日本株で米国のデータを見る条件は前日までで判定する
-const US_TIMED = (key: string) => !key.startsWith("JP:") && key !== "IX:NKVI" && key !== "IX:JPR";
+const US_TIMED = (key: string) => !key.startsWith("JP:") && !["IX:NKVI", "IX:JPR", "IX:N225"].includes(key);
 function withRegime(market: Market, cfgIn: any) {
   const cfg: any = normalizeCfg(cfgIn);
   for (const f of cfg.regime.filters) {

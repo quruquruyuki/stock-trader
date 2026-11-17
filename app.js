@@ -1,5 +1,5 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg, regimeMap, precomputeSignals } from "./engine.js";
+import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg, regimeMap, precomputeSignals, technicalRating, toWeekly, ratingLabel } from "./engine.js";
 import { GRIDS, backtest, sweep, segmentize, segReturns, combos, validParams, partMetrics } from "./research.js";
 
 const CFG = window.ST_CONFIG;
@@ -148,7 +148,7 @@ const STRAT_HELP = {
   supertrend: { how: "高値と安値の中心から、ATR（ふだんの値幅）の何倍か上と下に線を引きます。終値が上の線を超えたら上昇トレンドとして買い、下の線を割ったら売ります。", good: "数か月続くトレンド。線が値動きの荒さに合わせて広がるので、ノイズで振り落とされにくいです。", weak: "方向感のないもみ合い。", tip: "倍率を大きくすると、持つ期間が長く、売買が少なくなります。10日・3倍が標準です。" },
   adx: { how: "ADXは「トレンドの強さ」を0〜100で表す指標です。ADXが低い＝もみ合いで力をためている状態から、直近の高値を上抜けた瞬間に買います。直近の安値を割ったら売り。", good: "長いもみ合いから大きく動き出す銘柄。", weak: "もみ合いのまま上下に抜けたり戻ったりする相場。", tip: "「もみ合い」の値を上げると条件がゆるくなり、回数が増えます。Rob Booker の「ADXブレイクアウト」をもとにしています。" },
   linreg: { how: "直近N日の終値に一番よく合う直線（回帰線）を引きます。線が右肩上がりで、終値が線より上なら買い。線のまわりのばらつき（σ）の下の帯を割るか、線が下向きになったら売ります。", good: "なだらかに上がり続ける相場。", weak: "急な上げ下げ。直線では追いつけません。", tip: "期間を長くすると、大きな流れだけを見ます。下の帯の倍率を大きくすると、押し目で振り落とされにくくなります。" },
-  rating: { how: "TradingViewの「テクニカル評価」と同じ考え方で、移動平均12本（終値が上なら買い）と、RSI・ストキャス・MACD・モメンタム・ADX・アルティメット・オシレーターの判定を数え、−1（強い売り）〜+1（強い買い）の点数にします。", good: "いろいろな指標の意見がそろう、はっきりした上昇相場。", weak: "急な反転。多数決なので、変わり目には遅れます。", tip: "「買い」を0.5にすると「強い買い」のときだけ入ります。1つの指標に頼らないので、まず試す土台として便利です。" },
+  rating: { how: "TradingViewの「テクニカル」と同じ考え方で、移動平均15本（SMA・EMAの10〜200日、一目の基準線、VWMA、HMA。終値が上なら買い）と、オシレーター11個（RSI、ストキャス、CCI、ADX、オーサム、モメンタム、MACD、ストキャスRSI、ウィリアムズ%R、ブル・ベア・パワー、アルティメット）の判定を数え、−1（強い売り）〜+1（強い買い）の点数にします。市況タブのメーターと同じ計算です。", good: "いろいろな指標の意見がそろう、はっきりした上昇相場。", weak: "急な反転。多数決なので、変わり目には遅れます。", tip: "0.1超が「買い」、0.5超が「強い買い」です。「買い」を0.5にすると「強い買い」のときだけ入ります。1つの指標に頼らないので、まず試す土台として便利です。" },
   keltner: { how: "EMAの上下に、ATR（ふだんの値幅）の何倍かの帯を引きます（ケルトナーチャネル）。終値が上の帯を超えるほど強く上がったら買い、EMAまで戻ったら売ります。", good: "勢いのある上昇の始まり。", weak: "一度上に抜けてすぐ戻る相場。", tip: "ボリンジャーバンドと似ていますが、こちらは「抜けたら乗る」順張りです。倍率を下げると早く入れます。" },
   volexp: { how: "その日の値幅（高値−安値）が、ふだんの値幅（ATR）の何倍にも広がり、しかも高値近くで引けた陽線を「本気の買い」とみて買います。終値が短い移動平均を割ったら売り。", good: "材料が出て動き出した銘柄、急落からの力強い反発。", weak: "値幅が広がっても続かない相場。", tip: "倍率を上げると、めったにない大きな動きだけを拾います。" },
   insidebar: { how: "前日の高値・安値が前々日の範囲にすっぽり収まった足（インサイドバー＝はらみ足）は、力をためているサインとされます。そのあと前々日の高値を上抜けたら買い。前々日の安値を割るか、決めた日数たったら売ります。", good: "上昇トレンドの途中の小休止。", weak: "上抜けてすぐ戻る相場。", tip: "損切りの位置がはっきりしているので、「損切り幅から逆算」の買い方と相性が良いです。" },
@@ -217,7 +217,7 @@ const RG_PRESETS = {
 const RG_MAX = 8;
 let rgRows = []; // { preset, role, val, market }
 // 日本株で米国のデータを見る条件は、前日までの値で判定する（米国の終値は日本の引け後に出る）
-const usTimed = key => !key.startsWith("JP:") && key !== "IX:NKVI" && key !== "IX:JPR";
+const usTimed = key => !key.startsWith("JP:") && !["IX:NKVI", "IX:JPR", "IX:N225"].includes(key);
 const rgFilter = (r, m) => { const f = RG_PRESETS[r.preset].make(m, Number(r.val)); return { ...f, role: r.role, lag: !!f.key && m === "JP" && usTimed(f.key) }; };
 function renderRg() {
   $("rgList").innerHTML = rgRows.map((r, i) => {
@@ -1072,9 +1072,51 @@ document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dat
 // 目安の水準：[平常の上限, 警戒の上限]
 const VOL_LEVEL = { VIX: [20, 30], NKVI: [25, 35] };
 const VOL_DESC = { VIX: "米国株（S&P500）の今後1か月の値動きの見込み。20未満は平常、30超は強い警戒。", NKVI: "日経平均の今後1か月の値動きの見込み。ふだんは20〜30あたり、30を大きく超えると荒れ模様。" };
+/* ---------- テクニカル評価のメーター ---------- */
+let techBars = {}, techTf = "d";
+// −1（強い売り）〜 +1（強い買い）を半円のメーターで描く
+function gauge(v, size = 180) {
+  const r = size / 2 - 10, cx = size / 2, cy = size / 2 + 4, arc = (a0, a1, col) => {
+    const p = a => [cx - r * Math.cos(a), cy - r * Math.sin(a)];
+    const [x0, y0] = p(a0), [x1, y1] = p(a1);
+    return `<path d="M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}" stroke="${col}" stroke-width="${size / 18}" fill="none" stroke-linecap="round"/>`;
+  };
+  const seg = Math.PI / 5, gap = 0.06, cols = ["#8f2a2a", "#e0474c", "#a9abae", "#4a7ee8", "#2747c4"];
+  const a = v == null ? Math.PI / 2 : Math.PI * (Math.max(-1, Math.min(1, v)) + 1) / 2, nx = cx - (r - 14) * Math.cos(a), ny = cy - (r - 14) * Math.sin(a);
+  return `<svg viewBox="0 0 ${size} ${size / 2 + 14}" width="${size}" height="${size / 2 + 14}" aria-hidden="true">${cols.map((c, i) => arc(i * seg + gap, (i + 1) * seg - gap, c)).join("")}
+    ${v == null ? "" : `<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--ink)" stroke-width="${size / 40}" stroke-linecap="round"/><circle cx="${cx}" cy="${cy}" r="${size / 36}" fill="var(--ink)"/>`}</svg>`;
+}
+const voteText = v => v == null ? `<span class="mu">—</span>` : v > 0 ? `<span class="up">買い</span>` : v < 0 ? `<span class="dn">売り</span>` : `<span class="mu">中立</span>`;
+const fmtVal = v => v == null ? "—" : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("ja-JP") : v.toFixed(2);
+const countRow = c => `<div class="tcnt"><span>売り<b>${c.sell}</b></span><span>中立<b>${c.neutral}</b></span><span>買い<b>${c.buy}</b></span></div>`;
+function renderTech() {
+  const el = $("techBody"); if (!el) return;
+  const list = [["SPY", "S&P500（SPY）", ""], ["N225", "日経平均", "終値だけのデータなので、高値・安値を使う指標は終値で近似し、出来高を使うVWMAは数えていません。"]];
+  el.innerHTML = list.map(([k, name, note]) => {
+    let b = techBars[k];
+    if (!b?.length) return `<div class="tech"><h3>${name}</h3><div class="err">データを取得できませんでした</div></div>`;
+    if (techTf === "w") b = toWeekly(b);
+    const t = technicalRating(b);
+    if (!t) return `<div class="tech"><h3>${name}</h3><div class="mu">データが足りません</div></div>`;
+    const lab = ratingLabel(t.total), cl = t.total > 0.1 ? "up" : t.total < -0.1 ? "dn" : "";
+    const rows = items => items.map(x => `<tr><td class="p">${esc(x.name)}</td><td>${fmtVal(x.value)}</td><td>${voteText(x.vote)}</td></tr>`).join("");
+    return `<div class="tech"><h3>${name} <span class="mu num" style="font-size:12px;font-weight:400">${fmtD(t.d)}${techTf === "w" ? "の週" : ""}</span></h3>
+      <div class="tg">${gauge(t.total, 200)}<div class="tl"><span class="mu">サマリー</span><b class="${cl}">${lab}</b></div>${countRow(t.allCount)}</div>
+      <div class="tsub">
+        <div>${gauge(t.osc, 120)}<div class="tl sm"><span class="mu">オシレーター</span><b>${ratingLabel(t.osc)}</b></div>${countRow(t.oscCount)}</div>
+        <div>${gauge(t.ma, 120)}<div class="tl sm"><span class="mu">移動平均</span><b>${ratingLabel(t.ma)}</b></div>${countRow(t.maCount)}</div>
+      </div>
+      <details class="more"><summary>内訳を見る</summary><div class="body">
+        <table class="t"><tr><th style="text-align:left">オシレーター</th><th>値</th><th>判定</th></tr>${rows(t.oscItems)}</table>
+        <table class="t" style="margin-top:12px"><tr><th style="text-align:left">移動平均</th><th>値</th><th>判定</th></tr>${rows(t.maItems)}</table>
+      </div></details>${note ? `<p class="hint">${note}</p>` : ""}</div>`;
+  }).join("");
+}
+
 async function loadMarket() {
   const from = isoAgo(420), out = [];
-  const [ix, us, jp, rate] = await Promise.allSettled([getBars("IX", ["NKVI", "VIX"], from), getBars("US", ["SPY", "GLD", "TLT"], isoAgo(700)), getBars("JP", ["1306"], isoAgo(700)), getBars("IX", ["FF", "JPR"], isoAgo(700))]);
+  const [ix, us, jp, rate, nk] = await Promise.allSettled([getBars("IX", ["NKVI", "VIX"], from), getBars("US", ["SPY", "GLD", "TLT"], isoAgo(1500)), getBars("JP", ["1306"], isoAgo(700)), getBars("IX", ["FF", "JPR"], isoAgo(700)), getBars("IX", ["N225"], isoAgo(1500))]);
+  techBars = { SPY: us.status === "fulfilled" ? us.value.data.SPY : null, N225: nk.status === "fulfilled" ? nk.value.data.N225 : null };
   const charts = [];
   if (ix.status === "fulfilled") {
     for (const s of ["NKVI", "VIX"]) {
@@ -1098,6 +1140,10 @@ async function loadMarket() {
     const ma = b.slice(-n).reduce((a, x) => a + x.c, 0) / n, last = b[b.length - 1], diff = (last.c / ma - 1) * 100;
     return `<div class="keyrow"><span>${label}<br><span class="mu" style="font-size:12px">${n}日線との差 <span class="num">${pct(diff)}</span>・${fmtD(last.d)}</span></span><span class="${diff > 0 ? "ok" : "ng"}">${diff > 0 ? "強気" : "弱気"}</span></div>`;
   };
+  out.push(`<div class="card"><h2>テクニカル評価</h2>
+    <div class="seg" id="techTf" style="margin-bottom:6px"><button data-v="d" ${techTf === "d" ? 'class="on"' : ""}>日足</button><button data-v="w" ${techTf === "w" ? 'class="on"' : ""}>週足</button></div>
+    <div id="techBody"></div>
+    <p class="hint">TradingViewの「テクニカル」と同じ考え方で、移動平均15本とオシレーター11個の買い・売りを数えています。移動平均の票が多いので、実質は「今のトレンドの向き」です。売買の合図より、地合いの確認に向いています。</p></div>`);
   out.push(`<div class="card"><h2>指数のトレンド</h2>${trend(jp, "1306", "日本株（TOPIX連動ETF 1306）")}${trend(us, "SPY", "米国株（S&P500 ETF SPY）")}
     <p class="hint">相場フィルターの「株価指数が上向き・下向き」と同じ見方です。日本株は無料プランのため約12週間遅れのデータです。</p></div>`);
   // 金利の局面（半年前との差）と、金・債券の向き
@@ -1114,6 +1160,8 @@ async function loadMarket() {
   out.push(`<div class="card"><h2>金利・金・債券</h2>${phase("FF", "米国の政策金利（FF金利）", 0.25)}${phase("JPR", "日本の短期金利（月次）", 0.1)}${dir("GLD", "金（ETF GLD）")}${dir("TLT", "米国の長期国債（ETF TLT）")}
     <p class="hint">相場フィルターの「利上げ・利下げ局面」「金・債券が上がっている」と同じ見方です。債券が上向きのときは、長期金利が下がっています。</p></div>`);
   $("mktBody").innerHTML = out.join("");
+  renderTech();
+  segInit("techTf", v => { techTf = v; renderTech(); });
   charts.forEach(f => f());
 }
 

@@ -177,10 +177,10 @@ export const STRATEGIES = {
   rating: {
     group: "trend",
     label: "テクニカル評価（総合）",
-    desc: "移動平均12本と、RSI・ストキャス・MACD・モメンタム・ADX・アルティメットの7指標の「買い／売り」を数えて、−1〜+1の点数にする。点数が「買い」を超えたら買い、「売り」を下回ったら売り。",
+    desc: "TradingViewの「テクニカル」と同じ考え方。移動平均15本とオシレーター11個の「買い・中立・売り」を数えて−1〜+1の点数にし、点数が「買い」を超えたら買い、「売り」を下回ったら売り（0.1超＝買い、0.5超＝強い買い）。",
     params: [
-      { key: "buy", label: "買い（超え）", def: 0.3, min: 0, max: 1, step: 0.05 },
-      { key: "sell", label: "売り（未満）", def: 0, min: -1, max: 0.5, step: 0.05 },
+      { key: "buy", label: "買い（超え）", def: 0.1, min: -0.5, max: 1, step: 0.05 },
+      { key: "sell", label: "売り（未満）", def: -0.1, min: -1, max: 0.5, step: 0.05 },
     ],
   },
   keltner: {
@@ -615,29 +615,96 @@ function chartSignals(bars, p) {
   return out;
 }
 
-// テクニカル評価：移動平均12本と指標7つの多数決（−1〜+1）
-function ratingArr(bars) {
-  const c = bars.map(b => b.c), L = c.length;
-  const mas = [10, 20, 30, 50, 100, 200].flatMap(n => [smaArr(c, n), emaArr(c, n)]);
-  const rsi = rsiArr(c, 14), st = stochK(bars, 14, 3), ef = emaArr(c, 12), es = emaArr(c, 26), dm = dmiArr(bars, 14), uo = uoArr(bars);
-  const macd = c.map((_, i) => ef[i] != null && es[i] != null ? ef[i] - es[i] : null), start = macd.findIndex(v => v != null);
+// テクニカル評価（TradingView の「テクニカル」と同じ考え方）
+// 移動平均15本（SMA・EMA 10/20/30/50/100/200、一目の基準線、VWMA20、HMA9）と、オシレーター11個の「買い・中立・売り」を数え、
+// それぞれの平均（−1〜+1）を出し、2つの平均を総合点とする。0.5超＝強い買い、0.1超＝買い、−0.1〜0.1＝中立、−0.5未満＝強い売り
+function wmaArr(a, n) {
+  const out = new Array(a.length).fill(null), w = n * (n + 1) / 2;
+  for (let i = n - 1; i < a.length; i++) { let s = 0, ok = true; for (let k = 0; k < n; k++) { const v = a[i - n + 1 + k]; if (v == null) { ok = false; break; } s += v * (k + 1); } if (ok) out[i] = s / w; }
+  return out;
+}
+function ratingCore(bars) {
+  const L = bars.length, c = bars.map(b => b.c), hl2 = bars.map(b => (b.h + b.l) / 2);
+  const ma = [], osc = [];
+  for (const n of [10, 20, 30, 50, 100, 200]) { ma.push({ name: `EMA（${n}）`, v: emaArr(c, n) }); ma.push({ name: `SMA（${n}）`, v: smaArr(c, n) }); }
+  const base = bars.map((_, i) => i >= 25 ? (hhv(bars, i, 26) + llv(bars, i, 26)) / 2 : null);
+  ma.push({ name: "一目均衡表の基準線（26）", v: base });
+  const vw = bars.map((_, i) => { if (i < 19) return null; let pv = 0, vv = 0; for (let k = i - 19; k <= i; k++) { pv += bars[k].c * (bars[k].v || 0); vv += bars[k].v || 0; } return vv > 0 ? pv / vv : null; });
+  ma.push({ name: "VWMA（20）", v: vw });
+  const w4 = wmaArr(c, 4), w9 = wmaArr(c, 9), hma = wmaArr(c.map((_, i) => w4[i] != null && w9[i] != null ? 2 * w4[i] - w9[i] : null), 3);
+  ma.push({ name: "HMA（9）", v: hma });
+  for (const m of ma) m.vote = i => m.v[i] == null ? null : c[i] > m.v[i] ? 1 : c[i] < m.v[i] ? -1 : 0;
+  const up = (a, i) => a[i] != null && a[i - 1] != null && a[i] > a[i - 1], dn = (a, i) => a[i] != null && a[i - 1] != null && a[i] < a[i - 1];
+  // RSI
+  const rsi = rsiArr(c, 14);
+  osc.push({ name: "RSI（14）", v: rsi, vote: i => rsi[i] == null ? null : rsi[i] < 30 && up(rsi, i) ? 1 : rsi[i] > 70 && dn(rsi, i) ? -1 : 0 });
+  // ストキャスティクス %K(14,3,3)
+  const k = stochK(bars, 14, 3), d = smaArr(k.map(x => x ?? 0), 3).map((x, i) => k[i] == null || k[i - 2] == null ? null : x);
+  osc.push({ name: "ストキャスティクス %K（14, 3, 3）", v: k, vote: i => k[i] == null || d[i] == null ? null : k[i] < 20 && d[i] < 20 && k[i] > d[i] ? 1 : k[i] > 80 && d[i] > 80 && k[i] < d[i] ? -1 : 0 });
+  // CCI(20)
+  const tp = bars.map(b => (b.h + b.l + b.c) / 3), tsma = smaArr(tp, 20);
+  const cci = bars.map((_, i) => { if (tsma[i] == null) return null; let md = 0; for (let j = i - 19; j <= i; j++) md += Math.abs(tp[j] - tsma[i]); md /= 20; return md > 0 ? (tp[i] - tsma[i]) / (0.015 * md) : 0; });
+  osc.push({ name: "CCI（20）", v: cci, vote: i => cci[i] == null ? null : cci[i] < -100 && up(cci, i) ? 1 : cci[i] > 100 && dn(cci, i) ? -1 : 0 });
+  // ADX(14)
+  const dm = dmiArr(bars, 14);
+  osc.push({ name: "ADX（14）", v: dm.adx, vote: i => dm.adx[i] == null ? null : dm.adx[i] > 20 && up(dm.adx, i) ? (dm.pdi[i] > dm.mdi[i] ? 1 : -1) : 0 });
+  // オーサム・オシレーター
+  const s5 = smaArr(hl2, 5), s34 = smaArr(hl2, 34), ao = hl2.map((_, i) => s5[i] != null && s34[i] != null ? s5[i] - s34[i] : null);
+  osc.push({ name: "AO（オーサム・オシレーター）", v: ao, vote: i => ao[i] == null || ao[i - 1] == null ? null : ao[i] > 0 && ao[i] > ao[i - 1] ? 1 : ao[i] < 0 && ao[i] < ao[i - 1] ? -1 : 0 });
+  // モメンタム(10)
+  const mom = c.map((x, i) => i >= 10 ? x - c[i - 10] : null);
+  osc.push({ name: "モメンタム（10）", v: mom, vote: i => mom[i] == null || mom[i - 1] == null ? null : mom[i] > mom[i - 1] ? 1 : mom[i] < mom[i - 1] ? -1 : 0 });
+  // MACD(12, 26)
+  const ef = emaArr(c, 12), es = emaArr(c, 26), macd = c.map((_, i) => ef[i] != null && es[i] != null ? ef[i] - es[i] : null), st0 = macd.findIndex(v => v != null);
   const sig = new Array(L).fill(null);
-  if (start >= 0) { const e = emaArr(macd.slice(start), 9); for (let i = 0; i < e.length; i++) sig[start + i] = e[i]; }
-  const out = new Array(L).fill(null);
-  for (let i = 0; i < L; i++) {
-    const mv = mas.filter(m => m[i] != null).map(m => c[i] > m[i] ? 1 : c[i] < m[i] ? -1 : 0);
-    const ov = [];
-    if (rsi[i] != null) ov.push(rsi[i] < 30 ? 1 : rsi[i] > 70 ? -1 : 0);
-    if (st[i] != null) ov.push(st[i] < 20 ? 1 : st[i] > 80 ? -1 : 0);
-    if (macd[i] != null && sig[i] != null) ov.push(macd[i] > sig[i] ? 1 : -1);
-    if (i >= 10) ov.push(c[i] > c[i - 10] ? 1 : -1);
-    if (dm.adx[i] != null) ov.push(dm.adx[i] > 20 ? (dm.pdi[i] > dm.mdi[i] ? 1 : -1) : 0);
-    if (uo[i] != null) ov.push(uo[i] < 30 ? 1 : uo[i] > 70 ? -1 : 0);
-    if (mv.length < 4 || ov.length < 3) continue;
-    const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
-    out[i] = (avg(mv) + avg(ov)) / 2;
+  if (st0 >= 0) { const e = emaArr(macd.slice(st0), 9); for (let i = 0; i < e.length; i++) sig[st0 + i] = e[i]; }
+  osc.push({ name: "MACD（12, 26）", v: macd, vote: i => macd[i] == null || sig[i] == null ? null : macd[i] > sig[i] ? 1 : macd[i] < sig[i] ? -1 : 0 });
+  // ストキャスRSI(3, 3, 14, 14)
+  const srsi = rsi.map((x, i) => { if (x == null || i < 27) return null; let hi = -Infinity, lo = Infinity; for (let j = i - 13; j <= i; j++) { if (rsi[j] == null) return null; hi = Math.max(hi, rsi[j]); lo = Math.min(lo, rsi[j]); } return hi > lo ? (x - lo) / (hi - lo) * 100 : 50; });
+  const sk = srsi.map((_, i) => i >= 2 && srsi[i] != null && srsi[i - 1] != null && srsi[i - 2] != null ? (srsi[i] + srsi[i - 1] + srsi[i - 2]) / 3 : null);
+  const sd = sk.map((_, i) => i >= 2 && sk[i] != null && sk[i - 1] != null && sk[i - 2] != null ? (sk[i] + sk[i - 1] + sk[i - 2]) / 3 : null);
+  osc.push({ name: "ストキャスRSI（3, 3, 14, 14）", v: sk, vote: i => sk[i] == null || sd[i] == null ? null : sk[i] < 20 && sd[i] < 20 && sk[i] > sd[i] ? 1 : sk[i] > 80 && sd[i] > 80 && sk[i] < sd[i] ? -1 : 0 });
+  // ウィリアムズ%R(14)
+  const wr = bars.map((_, i) => { if (i < 13) return null; const hh = hhv(bars, i, 14), ll = llv(bars, i, 14); return hh > ll ? (hh - c[i]) / (hh - ll) * -100 : -50; });
+  osc.push({ name: "ウィリアムズ%R（14）", v: wr, vote: i => wr[i] == null ? null : wr[i] < -80 && up(wr, i) ? 1 : wr[i] > -20 && dn(wr, i) ? -1 : 0 });
+  // ブル・ベア・パワー(13)
+  const e13 = emaArr(c, 13), bbp = bars.map((b, i) => e13[i] == null ? null : (b.h - e13[i]) + (b.l - e13[i]));
+  osc.push({ name: "ブル・ベア・パワー（13）", v: bbp, vote: i => bbp[i] == null || e13[i - 1] == null ? null : bbp[i] < 0 && up(bbp, i) && e13[i] > e13[i - 1] ? 1 : bbp[i] > 0 && dn(bbp, i) && e13[i] < e13[i - 1] ? -1 : 0 });
+  // アルティメット・オシレーター(7, 14, 28)
+  const uo = uoArr(bars);
+  osc.push({ name: "アルティメット・オシレーター（7, 14, 28）", v: uo, vote: i => uo[i] == null ? null : uo[i] > 70 ? 1 : uo[i] < 30 ? -1 : 0 });
+  return { ma, osc, c };
+}
+const avgVotes = (list, i) => { const v = list.map(x => x.vote(i)).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+function ratingArr(bars) {
+  const { ma, osc } = ratingCore(bars), out = new Array(bars.length).fill(null);
+  for (let i = 1; i < bars.length; i++) {
+    const a = avgVotes(ma, i), b = avgVotes(osc, i);
+    if (a == null || b == null || ma.filter(x => x.vote(i) != null).length < 4 || osc.filter(x => x.vote(i) != null).length < 4) continue;
+    out[i] = (a + b) / 2;
   }
   return out;
+}
+export const ratingLabel = v => v == null ? "—" : v > 0.5 ? "強い買い" : v > 0.1 ? "買い" : v >= -0.1 ? "中立" : v >= -0.5 ? "売り" : "強い売り";
+// 最後の日の評価と、指標ごとの内訳（画面に出す用）
+export function technicalRating(bars) {
+  const i = bars.length - 1;
+  if (i < 30) return null;
+  const { ma, osc } = ratingCore(bars);
+  const items = g => g.map(x => ({ name: x.name, value: x.v[i], vote: x.vote(i) }));
+  const count = list => ({ sell: list.filter(x => x.vote === -1).length, neutral: list.filter(x => x.vote === 0).length, buy: list.filter(x => x.vote === 1).length });
+  const mi = items(ma), oi = items(osc), a = avgVotes(ma, i), b = avgVotes(osc, i);
+  return { d: bars[i].d, total: a != null && b != null ? (a + b) / 2 : null, ma: a, osc: b, maItems: mi, oscItems: oi, maCount: count(mi), oscCount: count(oi), allCount: count([...mi, ...oi]) };
+}
+// 週足にまとめる（評価を週足でも見る用）
+export function toWeekly(bars) {
+  const out = [];
+  for (const b of bars) {
+    const wk = Math.floor((Date.parse(b.d) / 864e5 + 3) / 7), last = out[out.length - 1];
+    if (last && last.wk === wk) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v || 0; last.d = b.d; }
+    else out.push({ wk, d: b.d, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 });
+  }
+  return out.map(({ wk, ...b }) => b);
 }
 
 // 各日の「持ちたいか（1）／持ちたくないか（0）」。その日までのデータだけで判定する
