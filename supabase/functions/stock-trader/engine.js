@@ -118,6 +118,10 @@ export const DEFAULT_CFG = {
   symbols: [],
   initialCash: 1_000_000,
   lot: 100,            // 売買単位（日本株は100株、米国株は1株）
+  // 1回に買う量の決め方。pct=資産の割合（maxPosPct と銘柄数の等分）/ cash=金額で固定 / shares=株数で固定
+  // risk=損切りにかかったときの損が資産の sizeVal% になる量（損切りの設定が必要。なければ pct と同じ）
+  sizeMode: "pct",
+  sizeVal: 0,
   feePct: 0,           // 手数料（約定金額に対する%）
   slipPct: 0.1,        // スリッページ（想定より不利な値段で約定する分、%）
   slPct: 0,            // 損切り（買値から何%下がったら売るか。0=なし）
@@ -137,6 +141,8 @@ export const DEFAULT_CFG = {
   //   kind: trend（key の終値が ma 日線より cond=above 上 / below 下）
   //         level（key の値が th より op=gt 上 / lt 下）
   //         rate （key の値が days 日前より th 以上 dir=up 上がった / down 下がった）
+  //         dd   （key の終値が、直近 days 本の高値から th% 以上下げている op=gt / th% 以内 op=lt）
+  //         season（月が m1〜m2 の間。年をまたぐ指定もできる。key は要らない）
   //   key : データの名前 "JP:1306" "US:GLD" "IX:VIX" "IX:FF" など
   //   role: avoid=当てはまる日は弱気 / only=当てはまらない日は弱気（＝当てはまる日だけ売買）
   //   lag : 日本株で米国のデータを見るとき、前日までの値で判定する
@@ -159,7 +165,9 @@ export function normalizeCfg(c) {
     params,
     symbols: [...new Set((cfg.symbols || []).map(s => String(s).trim().toUpperCase()).filter(Boolean))].slice(0, 10),
     initialCash: num(cfg.initialCash, 1, 1e12, DEFAULT_CFG.initialCash),
-    lot: num(cfg.lot, 1, 1000, 1),
+    lot: Math.round(num(cfg.lot, 1, 10000, 1)),
+    sizeMode: ["cash", "shares", "risk"].includes(cfg.sizeMode) ? cfg.sizeMode : "pct",
+    sizeVal: num(cfg.sizeVal, 0, 1e12, 0),
     feePct: num(cfg.feePct, 0, 5, 0),
     slipPct: num(cfg.slipPct, 0, 5, 0.1),
     slPct: num(cfg.slPct, 0, 90, 0),
@@ -182,11 +190,13 @@ export function normalizeCfg(c) {
 }
 
 function normalizeFilter(f, num) {
+  if (f?.kind === "season") return { kind: "season", key: "", role: f.role === "only" ? "only" : "avoid", lag: false, m1: Math.round(num(f.m1, 1, 12, 5)), m2: Math.round(num(f.m2, 1, 12, 10)) };
   const key = String(f?.key ?? "").trim().toUpperCase();
   if (!/^(JP|US|IX):[A-Z0-9.\-]{1,10}$/.test(key)) return null;
   const base = { key, role: f.role === "only" ? "only" : "avoid", lag: !!f.lag };
   if (f.kind === "trend") return { kind: "trend", ...base, ma: Math.round(num(f.ma, 5, 400, 200)), cond: f.cond === "above" ? "above" : "below" };
   if (f.kind === "level") return { kind: "level", ...base, op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 1000, 25) };
+  if (f.kind === "dd") return { kind: "dd", ...base, op: f.op === "lt" ? "lt" : "gt", days: Math.round(num(f.days, 20, 750, 250)), th: num(f.th, 0, 90, 10) };
   if (f.kind === "rate") return { kind: "rate", ...base, dir: f.dir === "down" ? "down" : "up", days: Math.round(num(f.days, 20, 750, 180)), th: num(f.th, 0, 10, 0.25) };
   return null;
 }
@@ -375,12 +385,21 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   if (rg.mode === "auto") {
     // 各条件を「その日は弱気か」を返す関数にする。その日までに分かっている最後の値で判定（lag なら前日まで）
     const tests = rg.filters.map(f => {
+      if (f.kind === "season") {
+        const inS = D => { const m = Number(D.slice(5, 7)); return f.m1 <= f.m2 ? m >= f.m1 && m <= f.m2 : m >= f.m1 || m <= f.m2; };
+        return D => f.role === "only" ? !inS(D) : inS(D);
+      }
       const b = data[f.key];
       if (!b?.length) return null;
       let ip = -1, jp = -1;
       const at = D => { while (ip + 1 < b.length && (f.lag ? b[ip + 1].d < D : b[ip + 1].d <= D)) ip++; return ip; };
       let cond;
       if (f.kind === "trend") { const m = smaArr(b.map(x => x.c), f.ma); cond = i => m[i] == null ? null : (f.cond === "above" ? b[i].c > m[i] : b[i].c <= m[i]); }
+      else if (f.kind === "dd") cond = i => {
+        let hi = 0; for (let k = Math.max(0, i - f.days + 1); k <= i; k++) hi = Math.max(hi, b[k].c);
+        const dd = hi > 0 ? (hi - b[i].c) / hi * 100 : 0;
+        return f.op === "gt" ? dd >= f.th : dd <= f.th;
+      };
       else if (f.kind === "level") cond = i => f.op === "gt" ? b[i].c > f.th : b[i].c < f.th;
       else cond = i => {
         const t = new Date(b[i].d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - f.days);
@@ -398,6 +417,17 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   let bearDays = 0;
   const slip = cfg.slipPct / 100, fee = cfg.feePct / 100;
   const posPct = Math.min(cfg.maxPosPct / 100, 1 / Math.max(1, syms.length));
+  // 1回に買う（空売りする）株数。どの決め方でも、手元資金と「1銘柄の上限」は超えない
+  const sizeQty = (price, scale, feeMul) => {
+    const eq = equityOf(st), cap = Math.min(st.cash, eq * cfg.maxPosPct / 100);
+    let budget = eq * posPct;
+    if (cfg.sizeVal > 0) {
+      if (cfg.sizeMode === "cash") budget = cfg.sizeVal;
+      else if (cfg.sizeMode === "shares") budget = cfg.sizeVal * price * feeMul;
+      else if (cfg.sizeMode === "risk" && cfg.slPct > 0) budget = eq * (cfg.sizeVal / 100) / (cfg.slPct / 100);
+    }
+    return Math.floor(Math.min(budget * scale, cap) / (price * feeMul) / cfg.lot + 1e-9) * cfg.lot;
+  };
 
   for (const D of dates) {
     const bar = s => { const i = idx[s]?.get(D); return i == null ? null : data[s][i]; };
@@ -427,8 +457,8 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
         // 空売りで新規
         if (st.positions[o.symbol]) continue;
         if (fills >= cfg.maxTradesPerDay) { notes.push({ d: D, msg: `${o.symbol}：1日の取引回数の上限（${cfg.maxTradesPerDay}回）のため注文を取り消しました` }); continue; }
-        const price = b.o * (1 - slip), budget = Math.min(st.cash, equityOf(st) * posPct * (o.scale || 1));
-        const qty = Math.floor(budget / price / cfg.lot) * cfg.lot;
+        const price = b.o * (1 - slip);
+        const qty = sizeQty(price, o.scale || 1, 1);
         if (qty <= 0) { notes.push({ d: D, msg: `${o.symbol}：資金が足りず空売りできませんでした（${cfg.lot}株単位）` }); continue; }
         const f = qty * price * fee;
         st.cash -= f;
@@ -449,8 +479,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
       } else {
         if (st.positions[o.symbol]) continue;
         const price = b.o * (1 + slip);
-        const budget = Math.min(st.cash, equityOf(st) * posPct * (o.scale || 1));
-        const qty = Math.floor(budget / (price * (1 + fee)) / cfg.lot) * cfg.lot;
+        const qty = sizeQty(price, o.scale || 1, 1 + fee);
         if (qty <= 0) { notes.push({ d: D, msg: `${o.symbol}：資金が足りず買えませんでした（${cfg.lot}株単位）` }); continue; }
         const cost = qty * price, f = cost * fee;
         st.cash -= cost + f;

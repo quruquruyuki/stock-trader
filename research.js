@@ -11,7 +11,7 @@ export function backtest(cfgIn, data, opts = {}) {
   };
   const o = { applyHalts: false, toDate: opts.to || null };
   const main = runDays(cfg, start(), data, o);
-  const bench = runDays({ ...cfg, strategy: "hold", params: {}, side: "long", slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, regime: { mode: "off" } }, start(), data, o);
+  const bench = runDays({ ...cfg, strategy: "hold", params: {}, side: "long", slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, sizeMode: "pct", regime: { mode: "off" } }, start(), data, o);
   return { cfg, ...main, bearPct: main.equity.length ? main.bearDays / main.equity.length * 100 : 0, metrics: metrics(main.equity, main.trades, cfg.initialCash), bench: { equity: bench.equity, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
 }
 

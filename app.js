@@ -128,20 +128,56 @@ function spark(pts, up) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${up ? "#0f7a55" : "#b8392e"}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
+/* ---------- 戦略のくわしい説明 ---------- */
+const STRAT_HELP = {
+  sma: { how: "直近の終値の平均（移動平均）を短期と長期の2本で見ます。短期が長期を上に抜けたら「上向きに変わった」とみて買い（ゴールデンクロス）、下に抜けたら売ります（デッドクロス）。", good: "上昇や下落が数か月続く、流れのはっきりした相場。大きな上昇に長く乗れます。", weak: "上下を行ったり来たりするもみ合い。買ってすぐ売る「だまし」が続き、小さな負けが積み重なります。", tip: "日数を短くすると反応は早いがだましが増え、長くすると遅いが落ち着きます。定番は 5と25、25と75、50と200。" },
+  rsi: { how: "RSIは、直近の値上がり幅と値下がり幅の比から「買われすぎ・売られすぎ」を0〜100で表す指標です。低い（売られすぎ）ところで買い、高い（買われすぎ）ところで売ります。", good: "一定の幅で上下するもみ合い相場、長期では上向きの銘柄の一時的な下げ。", weak: "強い下落が続く相場。売られすぎのまま下がり続け、早く買いすぎます。", tip: "「買い」を30→20に下げると回数は減りますが、より深い下げだけを拾います。損切りか相場フィルターと組み合わせると、下落相場での傷を抑えられます。" },
+  breakout: { how: "終値が過去N日の高値を超えたら「新しい上昇が始まった」とみて買い、過去M日の安値を割ったら売ります。有名な「タートル流」の考え方です。", good: "長いもみ合いを抜けて大きく動き出す場面、強い上昇相場。", weak: "高値を少し超えてはすぐ戻る相場。高いところで買って安く売ることになります。", tip: "勝率は低め（3〜4割）でも、たまの大きな勝ちで取り返す戦略です。負けが続いても続けられる量で。買い20日・売り10日が定番。" },
+  boll: { how: "移動平均の上下に、値動きの大きさ（標準偏差σ）で幅をつけた帯がボリンジャーバンドです。終値が下の帯を割ったら「下げすぎ」とみて買い、平均線まで戻ったら売ります。", good: "もみ合い相場、急落のあとの戻り。", weak: "悪材料で下げが続くとき。帯に沿って下がり続ける「バンドウォーク」で損が膨らみます。", tip: "倍率を2→2.5や3にすると、めったにない大きな下げだけを拾います。損切りを必ず入れたい戦略です。" },
+  macd: { how: "短期と長期の平均（最近の値を重く見るEMA）の差がMACDです。MACDが、その平均である「シグナル線」を上に抜けたら買い、下に抜けたら売ります。勢いの変わり目を見ます。", good: "流れが出始めた初動。移動平均クロスより早く反応します。", weak: "もみ合い。小さな上下で何度も売買してしまいます。", tip: "12・26・9が世界中で使われている標準です。「トレンド条件（200日線より上）」と組み合わせると、下落相場での買いを減らせます。" },
+  roc: { how: "N日前の株価と比べて、基準より上がっていれば持ち、下回ったら売ります。「上がっているものは、しばらく上がり続けやすい」という性質（モメンタム）を使います。", good: "強い銘柄がさらに強くなる相場、指数ETFの長期の上昇。", weak: "流れが急に反転する場面。高値で持ったまま下げを受けます。", tip: "比較を60日より120日・200日と長くすると、売買は減って大きな流れだけに乗ります。複数銘柄に入れると、強い銘柄だけを持つ形になります。" },
+  stoch: { how: "直近N日の高値と安値の幅の中で、今の終値がどの位置にあるか（%K）を0〜100で見ます。下のほうで買い、上のほうで売ります。RSIより敏感に動きます。", good: "短い周期で上下するもみ合い相場。", weak: "一方向に強く動く相場。下げ続ける途中で何度も買ってしまいます。", tip: "売買回数が多くなりやすいので、手数料と滑りを入れて確かめてください。期間を長くすると落ち着きます。" },
+  tma: { how: "短期・中期・長期の3本の移動平均が、上から短期＞中期＞長期の順に並んだとき（パーフェクトオーダー）だけ持ちます。並びが崩れたら売ります。", good: "きれいな上昇が長く続く相場。だましが少なく、持っている間は安心感があります。", weak: "上昇の初動と終わり。入るのも出るのも遅く、短い上昇は取り逃します。", tip: "売買は少なめ。5・25・75が定番です。回数が少なすぎるときは、短い組み合わせ（5・10・25など）に。" },
+  dip: { how: "終値がN日続けて下がったら「下げすぎの反発」を狙って買い、短い移動平均を上回ったら売ります。数日で終わる短い売買です。", good: "長期では上向きの銘柄や指数ETFの、一時的な下げ。", weak: "下落相場の入り口。続落がそのまま大きな下げにつながります。", tip: "「トレンド条件（200日線より上）」や相場フィルターと組み合わせるのが基本です。1回の利益は小さいので、手数料と滑りの影響を確かめてください。" },
+  tom: { how: "月末から月初の数日だけ持ちます。給料日後の積立や投信の買いが月の変わり目に入りやすい、という経験則（月替わり効果）を使います。", good: "相場全体が落ち着いているとき。指数ETF向きです。", weak: "個別の悪材料や急落。日付だけで買うので、相場の状態は見ていません。", tip: "持つ日数が短いぶん、資金が市場にさらされる時間も短い戦略です。相場フィルターと組み合わせると、荒れた月を避けられます。" },
+  fear: { how: "恐怖指数（VIX・日経平均VI）が高い＝みんなが怖がって売っているとき、に買い、落ち着いたら売ります。「総悲観は買い」の考え方です。", good: "急落のあと。過去の米国株では、恐怖指数が高い日のあとの成績は平均より良い傾向でした。", weak: "金融危機のように、恐怖が長く続いて下げ続ける局面。早く入りすぎます。", tip: "機会は年に数回です。指数ETFで使うのが素直。「仕掛け」を上げるほど回数は減り、深い下げだけを拾います。" },
+  fearpeak: { how: "恐怖指数が高くなったあと、直近20日の高値から一定の割合だけ下がったのを確かめてから買います。「怖さのピークが過ぎた」のを待つ、慎重な入り方です。", good: "急落からの回復。下げの途中で買ってしまう失敗を減らせます。", weak: "V字で一気に戻る相場。待っている間に、戻りの最初を取り逃します。", tip: "「恐怖指数の逆張り」と結果を比べてみてください。下落を小さくしたいならこちら、戻りを全部取りたいなら逆張り、という使い分けです。" },
+  hold: { how: "最初に買って、そのまま持ち続けます。売買はしません。", good: "長期で上がる市場。手数料も手間もかからず、多くの戦略はこれに勝てません。", weak: "長い下落相場。下げをそのまま受けます。", tip: "ほかの戦略の「ものさし」です。結果の画面の「買って持ち続けた場合」と同じものです。" },
+};
+
 /* ---------- 相場フィルターの条件 ---------- */
 // 条件のひな形。make(市場, 数値) で エンジン用の条件にする。role は初期の使い方（avoid=控える / only=この時だけ）
 const tr = (key, cond) => (m, v) => ({ kind: "trend", key: typeof key === "function" ? key(m) : key, ma: v, cond });
-const rt = (key, dir) => (m, v) => ({ kind: "rate", key, dir, days: 180, th: v });
+const rt = (key, dir, days = 180) => (m, v) => ({ kind: "rate", key, dir, days, th: v });
+const dd = op => (m, v) => ({ kind: "dd", key: idxKey(m), op, days: 250, th: v });
+const idxName = m => m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）";
 const idxKey = m => m === "JP" ? "JP:1306" : "US:SPY", fearKey = m => m === "JP" ? "IX:NKVI" : "IX:VIX";
 const RG_PRESETS = {
   idxdown: { group: "株", label: "株価指数が下向き", sub: m => `${m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）"}が移動平均より下`, unit: "移動平均（日）", def: () => 200, byMarket: true, role: "avoid", make: tr(idxKey, "below") },
   idxup: { group: "株", label: "株価指数が上向き", sub: m => `${m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）"}が移動平均より上`, unit: "移動平均（日）", def: () => 200, byMarket: true, role: "only", make: tr(idxKey, "above") },
   fearhigh: { group: "株", label: "恐怖指数が高い", sub: m => `${m === "JP" ? "日経平均VI" : "VIX"}がこの値より上`, unit: "この値を超えたら", def: m => m === "JP" ? 30 : 25, byMarket: true, role: "avoid", make: (m, v) => ({ kind: "level", key: fearKey(m), op: "gt", th: v }) },
   fearlow: { group: "株", label: "恐怖指数が低い", sub: m => `${m === "JP" ? "日経平均VI" : "VIX"}がこの値より下`, unit: "この値を下回ったら", def: m => m === "JP" ? 20 : 15, byMarket: true, role: "only", make: (m, v) => ({ kind: "level", key: fearKey(m), op: "lt", th: v }) },
+  correction: { group: "株", label: "調整局面（高値から大きく下落）", sub: m => `${idxName(m)}が直近1年の高値からこの%以上下げている`, unit: "高値からの下落（%）", def: () => 10, role: "avoid", make: dd("gt") },
+  nearhigh: { group: "株", label: "高値圏（1年の高値に近い）", sub: m => `${idxName(m)}が直近1年の高値からこの%以内`, unit: "高値からの差（%以内）", def: () => 3, role: "only", make: dd("lt") },
+  techup: { group: "株", label: "ハイテク株が強い", sub: () => "ナスダック100 ETF（QQQ）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:QQQ", "above") },
+  smallup: { group: "株", label: "小型株が強い（リスクを取る空気）", sub: () => "米国小型株ETF（IWM）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:IWM", "above") },
+  credit: { group: "株", label: "信用不安（低格付け社債が売られている）", sub: () => "ハイイールド債ETF（HYG）が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("US:HYG", "below") },
   hike: { group: "金利", label: "利上げ局面（米国）", sub: () => "米国の政策金利が半年前より上がっている", unit: "半年の上げ幅（%）", def: () => 0.25, role: "avoid", make: rt("IX:FF", "up") },
   cut: { group: "金利", label: "利下げ局面（米国）", sub: () => "米国の政策金利が半年前より下がっている", unit: "半年の下げ幅（%）", def: () => 0.25, role: "only", make: rt("IX:FF", "down") },
   jhike: { group: "金利", label: "利上げ局面（日本）", sub: () => "日本の短期金利が半年前より上がっている（月次）", unit: "半年の上げ幅（%）", def: () => 0.1, role: "avoid", make: rt("IX:JPR", "up") },
   jcut: { group: "金利", label: "利下げ局面（日本）", sub: () => "日本の短期金利が半年前より下がっている（月次）", unit: "半年の下げ幅（%）", def: () => 0.1, role: "only", make: rt("IX:JPR", "down") },
+  y10up: { group: "金利", label: "長期金利が上昇している", sub: () => "米国の10年金利が3か月前より上がっている", unit: "3か月の上げ幅（%）", def: () => 0.5, role: "avoid", make: rt("IX:US10Y", "up", 90) },
+  y10down: { group: "金利", label: "長期金利が低下している", sub: () => "米国の10年金利が3か月前より下がっている", unit: "3か月の下げ幅（%）", def: () => 0.5, role: "only", make: rt("IX:US10Y", "down", 90) },
+  invert: { group: "景気・物価", label: "逆イールド（景気後退のサイン）", sub: () => "米国の10年金利−2年金利がこの値より下", unit: "この値より下（%）", def: () => 0, zero: true, role: "avoid", make: (m, v) => ({ kind: "level", key: "IX:T10Y2Y", op: "lt", th: v }) },
+  unemp: { group: "景気・物価", label: "景気悪化（失業率が上昇）", sub: () => "米国の失業率が1年前より上がっている（月次）", unit: "1年の上げ幅（%）", def: () => 0.5, role: "avoid", make: rt("IX:UNRATE", "up", 365) },
+  infup: { group: "景気・物価", label: "インフレ懸念が強まっている", sub: () => "米国の期待インフレ率（10年）が半年前より上がっている", unit: "半年の上げ幅（%）", def: () => 0.2, role: "avoid", make: rt("IX:BEI", "up") },
+  infdown: { group: "景気・物価", label: "インフレ懸念が和らいでいる", sub: () => "米国の期待インフレ率（10年）が半年前より下がっている", unit: "半年の下げ幅（%）", def: () => 0.2, role: "only", make: rt("IX:BEI", "down") },
+  yenweak: { group: "為替・原油", label: "円安が進んでいる", sub: () => "ドル円が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("IX:USDJPY", "above") },
+  yenstrong: { group: "為替・原油", label: "円高が進んでいる", sub: () => "ドル円が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("IX:USDJPY", "below") },
+  oilup: { group: "為替・原油", label: "原油が上がっている", sub: () => "原油（WTI）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("IX:WTI", "above") },
+  oildown: { group: "為替・原油", label: "原油が下がっている", sub: () => "原油（WTI）が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("IX:WTI", "below") },
+  sellmay: { group: "季節", label: "5〜10月（セル・イン・メイ）", sub: () => "株が弱いと言われる時期", def: () => 1, role: "avoid", make: () => ({ kind: "season", m1: 5, m2: 10 }) },
+  yearend: { group: "季節", label: "11〜4月（株が強いと言われる時期）", sub: () => "年末から春にかけて", def: () => 1, role: "only", make: () => ({ kind: "season", m1: 11, m2: 4 }) },
   goldup: { group: "金・債券", label: "金が上がっている", sub: () => "金ETF（GLD）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("US:GLD", "above") },
   golddown: { group: "金・債券", label: "金が下がっている", sub: () => "金ETF（GLD）が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:GLD", "below") },
   bondup: { group: "金・債券", label: "債券が上がっている", sub: () => "米国の長期国債ETF（TLT）が移動平均より上（＝長期金利は低下）", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:TLT", "above") },
@@ -151,13 +187,13 @@ const RG_MAX = 8;
 let rgRows = []; // { preset, role, val, market }
 // 日本株で米国のデータを見る条件は、前日までの値で判定する（米国の終値は日本の引け後に出る）
 const usTimed = key => !key.startsWith("JP:") && key !== "IX:NKVI" && key !== "IX:JPR";
-const rgFilter = (r, m) => { const f = RG_PRESETS[r.preset].make(m, Number(r.val)); return { ...f, role: r.role, lag: m === "JP" && usTimed(f.key) }; };
+const rgFilter = (r, m) => { const f = RG_PRESETS[r.preset].make(m, Number(r.val)); return { ...f, role: r.role, lag: !!f.key && m === "JP" && usTimed(f.key) }; };
 function renderRg() {
   $("rgList").innerHTML = rgRows.map((r, i) => {
     const P = RG_PRESETS[r.preset];
     return `<div class="rgrow"><div class="t"><span>${esc(P.label)}<small>${esc(P.sub(market))}</small></span><button class="x" data-del="${i}" aria-label="この条件を消す">×</button></div>
       <div class="g"><div><label class="lab" for="rgRole${i}">この条件のとき</label><select class="in" id="rgRole${i}" data-role="${i}"><option value="avoid" ${r.role === "avoid" ? "selected" : ""}>売買を控える</option><option value="only" ${r.role === "only" ? "selected" : ""}>この時だけ売買する</option></select></div>
-      <div><label class="lab" for="rgVal${i}">${esc(P.unit)}</label><input class="in num" id="rgVal${i}" data-val="${i}" inputmode="decimal" value="${esc(String(r.val))}"></div></div></div>`;
+      ${P.unit ? `<div><label class="lab" for="rgVal${i}">${esc(P.unit)}</label><input class="in num" id="rgVal${i}" data-val="${i}" inputmode="decimal" value="${esc(String(r.val))}"></div>` : ""}</div></div>`;
   }).join("");
   const used = new Set(rgRows.map(r => r.preset)), groups = {};
   for (const [k, P] of Object.entries(RG_PRESETS)) (groups[P.group] ||= []).push(`<option value="${k}" ${used.has(k) ? "disabled" : ""}>${esc(P.label)}</option>`);
@@ -165,7 +201,7 @@ function renderRg() {
   $("rgAdd").disabled = rgRows.length >= RG_MAX;
   $("rgActBox").classList.toggle("hidden", !rgRows.length);
   $("rgHint").textContent = !rgRows.length ? "条件を足さなければ、相場フィルターは使いません。条件は組み合わせて使えます（例：利下げ局面の「時だけ」＋恐怖指数が高い時は「控える」）。"
-    : `${rgRows.length > 1 ? "条件のどれか1つでも売買しない側に当てはまる日を" : "売買しない側に当てはまる日を"}「弱気」とみなして、上の動きをします。空売りのときは逆で、「弱気」の日だけ仕掛けます。${market === "JP" && rgRows.some(r => usTimed(rgFilter(r, market).key)) ? "米国のデータを見る条件は、前日までの値で判定します。" : ""}`;
+    : `${rgRows.length > 1 ? "条件のどれか1つでも売買しない側に当てはまる日を" : "売買しない側に当てはまる日を"}「弱気」とみなして、上の動きをします。空売りのときは逆で、「弱気」の日だけ仕掛けます。${market === "JP" && rgRows.some(r => rgFilter(r, market).lag) ? "米国のデータを見る条件は、前日までの値で判定します。" : ""}`;
 }
 
 /* ---------- バックテスト画面 ---------- */
@@ -179,13 +215,30 @@ function setMarket(m) {
   for (const r of rgRows) { const P = RG_PRESETS[r.preset]; if (P.byMarket && r.val === P.def(r.market)) r.val = P.def(m); r.market = m; }
   renderRg();
   $("btCash").value = m === "JP" ? "1000000" : "10000";
-  $("btLot").innerHTML = m === "JP"
-    ? `<option value="100">100株（単元株）</option><option value="1">1株（単元未満株）</option>`
-    : `<option value="1">1株</option>`;
+  $("btLot").value = m === "JP" ? "100" : "1";
+  $("btLotList").innerHTML = (m === "JP" ? [100, 10, 1] : [1, 5, 10]).map(v => `<option value="${v}">`).join("");
+  $("btLotHint").textContent = m === "JP" ? "株数をこの単位にそろえます。100＝単元株、1＝単元未満株（S株・かぶミニ）。10 など好きな数も入れられます。" : "株数をこの単位にそろえます。米国株は1株から買えます。";
+  renderSize(true);
+}
+// 1回に買う量の決め方
+const SIZE = {
+  pct: { lab: "1銘柄に使う上限（%）", def: () => 100, hint: "資産のこの割合までを1銘柄に使います。複数銘柄のときは、銘柄数で等分した額と小さいほうです。資産が増減すると買う量も一緒に変わります。迷ったらこれ。" },
+  cash: { lab: m => `1回の金額（${m === "JP" ? "円" : "ドル"}）`, def: m => m === "JP" ? 300000 : 3000, hint: "毎回この金額ぶんだけ買います。勝っても負けても買う量を変えたくないとき、少額で試したいときに。" },
+  shares: { lab: "1回の株数", def: () => Number($("btLot").value) || 1, hint: "毎回この株数だけ買います。実際に自分が買う株数に合わせて試したいときに。株価が高い銘柄ほど金額が大きくなる点に注意。" },
+  risk: { lab: "1回で負けてよい額（資産の%）", def: () => 1, hint: "損切りにかかったときの損が、資産のこの割合になるように株数を逆算します（例：資産100万円・1%・損切り5%なら、20万円ぶん買う）。損切り幅が広いほど買う量が減ります。「細かい設定」で損切りを入れてください。" },
+};
+const sizeText = (cfg, m) => cfg.sizeMode === "cash" && cfg.sizeVal ? `1回 ${money(cfg.sizeVal, m)}` : cfg.sizeMode === "shares" && cfg.sizeVal ? `1回 ${cfg.sizeVal}株` : cfg.sizeMode === "risk" && cfg.sizeVal ? `損切り時の損が資産の${cfg.sizeVal}%になる量` : `資産の${cfg.maxPosPct}%まで`;
+function renderSize(reset) {
+  const S = SIZE[$("btSize").value];
+  $("btSizeLab").textContent = typeof S.lab === "function" ? S.lab(market) : S.lab;
+  $("btSizeHint").textContent = S.hint;
+  if (reset) $("btSizeVal").value = String(S.def(market));
 }
 function renderParams() {
   const st = STRATEGIES[$("btStrategy").value];
   $("btDesc").textContent = st.desc;
+  const H = STRAT_HELP[$("btStrategy").value];
+  $("btHelp").innerHTML = H ? `<dl><dt>しくみ</dt><dd>${H.how}</dd><dt>向いている相場</dt><dd>${H.good}</dd><dt>苦手な相場</dt><dd>${H.weak}</dd><dt>使い方のコツ</dt><dd>${H.tip}</dd></dl>` : "";
   $("btParams").innerHTML = st.params.map(p => `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="${p.step ? "decimal" : "numeric"}" value="${p.def}"></div>`).join("");
   $("swCard") && $("swCard").classList.toggle("hidden", !Object.keys(GRIDS[$("btStrategy").value] || {}).length);
   $("btParams").classList.toggle("hidden", !st.params.length);
@@ -197,8 +250,8 @@ function readCfg() {
   const n = id => Number(String($(id).value).replace(/[,\s]/g, ""));
   return normalizeCfg({
     strategy, params, symbols: parseSyms($("btSymbols").value),
-    initialCash: n("btCash"), lot: n("btLot"), slPct: n("btSl"), tpPct: n("btTp"),
-    feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
+    initialCash: n("btCash"), lot: n("btLot"), sizeMode: $("btSize").value, sizeVal: $("btSize").value === "pct" ? 0 : n("btSizeVal"), slPct: n("btSl"), tpPct: n("btTp"),
+    feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: $("btSize").value === "pct" ? n("btSizeVal") : 100, trendMa: n("btTrend"),
     side: $("btSide").value, borrowPct: n("btBorrow"),
     fearSym: STRATEGIES[strategy].needsVol ? $("btFearSym").value : "", fearLag: market === "JP" && $("btFearSym").value === "VIX",
     regime: { mode: rgRows.length ? "auto" : "off", action: $("btRgAct").value, filters: rgRows.map(r => rgFilter(r, market)) },
@@ -228,14 +281,16 @@ $("btRun").onclick = async () => {
   if (cfg.strategy === "tma" && !(cfg.params.short < cfg.params.mid && cfg.params.mid < cfg.params.long)) { $("btErr").textContent = "移動平均は 短期＜中期＜長期 の順にしてください"; return; }
   if (cfg.strategy === "fear" && cfg.params.sell >= cfg.params.buy) { $("btErr").textContent = "「手じまい」は「仕掛け」より小さくしてください"; return; }
   if (cfg.strategy === "stoch" && cfg.params.buy >= cfg.params.sell) { $("btErr").textContent = "「買い」は「売り」より小さくしてください"; return; }
-  if (rgRows.some(r => !(Number(r.val) > 0))) { $("btErr").textContent = "相場フィルターの数値を入れてください"; return; }
+  if (rgRows.some(r => RG_PRESETS[r.preset].zero ? !Number.isFinite(Number(r.val)) : !(Number(r.val) > 0))) { $("btErr").textContent = "相場フィルターの数値を入れてください"; return; }
+  if ($("btSize").value !== "pct" && !(cfg.sizeVal > 0)) { $("btErr").textContent = "「資金と買う量」の数値を入れてください"; return; }
+  if (cfg.sizeMode === "risk" && !(cfg.slPct > 0)) { $("btErr").textContent = "「損切り幅から逆算」を使うときは、細かい設定で損切り（%）を入れてください"; return; }
   busy($("btRun"), true, "株価を取得して計算中…");
   try {
     const start = period ? isoAgo(Math.round(period * 365.25)) : null;
     const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null; // シグナルの助走分も取る
     const { data, errors } = await getBars(market, cfg.symbols, from);
     // 相場フィルターの条件と、恐怖指数を使う戦略のデータ。data["US:GLD"] のような名前で足す
-    for (const key of new Set([...cfg.regime.filters.map(f => f.key), ...(cfg.fearSym ? ["IX:" + cfg.fearSym] : [])])) {
+    for (const key of new Set([...cfg.regime.filters.map(f => f.key).filter(Boolean), ...(cfg.fearSym ? ["IX:" + cfg.fearSym] : [])])) {
       const [km, ks] = key.split(":"), v = await getBars(km, [ks], from);
       if (!v.data[ks]?.length) throw new Error(`${keyName(key)} のデータが取得できませんでした${v.errors[ks] ? "：" + v.errors[ks] : ""}`);
       data[key] = v.data[ks];
@@ -306,10 +361,12 @@ const paramText = cfg => {
 };
 const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
 const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
-const KEY_NAME = { "JP:1306": "TOPIX（1306）", "US:SPY": "S&P500（SPY）", "US:GLD": "金（GLD）", "US:TLT": "米国長期債（TLT）", "IX:VIX": "VIX", "IX:NKVI": "日経平均VI", "IX:FF": "米国の政策金利", "IX:JPR": "日本の短期金利" };
+const KEY_NAME = { "JP:1306": "TOPIX（1306）", "US:SPY": "S&P500（SPY）", "US:GLD": "金（GLD）", "US:TLT": "米国長期債（TLT）", "IX:VIX": "VIX", "IX:NKVI": "日経平均VI", "IX:FF": "米国の政策金利", "IX:JPR": "日本の短期金利", "US:QQQ": "ナスダック100（QQQ）", "US:IWM": "米国小型株（IWM）", "US:HYG": "ハイイールド債（HYG）", "IX:USDJPY": "ドル円", "IX:US10Y": "米国の10年金利", "IX:T10Y2Y": "米国の長短金利差", "IX:WTI": "原油（WTI）", "IX:BEI": "米国の期待インフレ率", "IX:UNRATE": "米国の失業率" };
 const keyName = k => KEY_NAME[k] || String(k).split(":").pop();
 const filterText = f => {
-  const what = f.kind === "trend" ? `${keyName(f.key)}が${f.ma}日線より${f.cond === "above" ? "上" : "下"}`
+  const what = f.kind === "season" ? `${f.m1}〜${f.m2}月`
+    : f.kind === "dd" ? `${keyName(f.key)}が高値から${f.th}%${f.op === "gt" ? "以上下落" : "以内"}`
+    : f.kind === "trend" ? `${keyName(f.key)}が${f.ma}日線より${f.cond === "above" ? "上" : "下"}`
     : f.kind === "level" ? `${keyName(f.key)}が${f.th}${f.op === "gt" ? "超" : "未満"}`
     : `${keyName(f.key)}が約${Math.round(f.days / 30)}か月で${f.th}%以上${f.dir === "up" ? "上昇" : "低下"}`;
   return `${what}${f.lag ? "（前日まで）" : ""}${f.role === "only" ? "の時だけ売買" : "なら控える"}`;
@@ -380,7 +437,7 @@ $("btNotion").onclick = async () => {
       { type: "h", text: "設定" },
       { type: "bullets", items: [
         `市場：${m === "JP" ? "日本株" : "米国株"}`, `銘柄：${syms}`, `戦略：${paramText(cfg)}`, `期間：${fmtD(first)}〜${fmtD(last)}`,
-        `初期資金：${money(cfg.initialCash, m)}／売買単位：${cfg.lot}株`,
+        `初期資金：${money(cfg.initialCash, m)}／売買単位：${cfg.lot}株／買う量：${sizeText(cfg, m)}`,
         `相場フィルター：${regimeText(cfg)}`,
         `損切り：${cfg.slPct ? cfg.slPct + "%" : "なし"}／利確：${cfg.tpPct ? cfg.tpPct + "%" : "なし"}／手数料：${cfg.feePct}%／滑り：${cfg.slipPct}%`,
         "約定：終値で判定し翌営業日の始値で約定（株ラボで計算）",
@@ -608,7 +665,7 @@ async function openBot(id) {
     <div class="card"><h2>設定</h2>
       <p class="hint" style="margin:0;line-height:1.8">${m === "JP" ? "日本株" : "米国株"}／${esc(paramText(cfg))}<br>
       銘柄：${cfg.symbols.map(s => esc(symLabel(m, s))).join("、")}<br>
-      売買単位 ${cfg.lot}株／損切り ${cfg.slPct || "なし"}${cfg.slPct ? "%" : ""}／利確 ${cfg.tpPct || "なし"}${cfg.tpPct ? "%" : ""}／手数料 ${cfg.feePct}%／滑り ${cfg.slipPct}%<br>
+      売買単位 ${cfg.lot}株／買う量 ${esc(sizeText(cfg, m))}／損切り ${cfg.slPct || "なし"}${cfg.slPct ? "%" : ""}／利確 ${cfg.tpPct || "なし"}${cfg.tpPct ? "%" : ""}／手数料 ${cfg.feePct}%／滑り ${cfg.slipPct}%<br>
       安全装置：1日${cfg.maxTradesPerDay}回まで・1日${cfg.maxDailyLossPct}%の損失で停止・最高値から${cfg.maxDrawdownPct}%下落で停止<br>
       開始 ${new Date(b.created_at).toLocaleDateString("ja-JP")}</p>
     </div>
@@ -734,6 +791,7 @@ sb.auth.onAuthStateChange((_ev, session) => {
 /* ---------- 初期化 ---------- */
 $("btStrategy").innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
 $("btStrategy").onchange = renderParams;
+$("btSize").onchange = () => renderSize(true);
 $("rgAdd").onchange = e => {
   const k = e.target.value, P = RG_PRESETS[k];
   if (P && rgRows.length < RG_MAX) rgRows.push({ preset: k, role: P.role, val: P.def(market), market });

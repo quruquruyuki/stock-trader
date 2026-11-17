@@ -40,7 +40,7 @@ const json = (body: unknown, status = 200) =>
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 type Bar = { d: string; o: number; h: number; l: number; c: number; v: number };
-type Market = "JP" | "US" | "IX"; // IX = 指標（恐怖指数 VIX・NKVI、政策金利 FF・JPR）
+type Market = "JP" | "US" | "IX"; // IX = 指標（恐怖指数、金利、為替、原油など）
 const REFRESH_MS = 3 * 60 * 60 * 1000; // 3時間以内に取得済みなら取り直さない
 
 /* ---------- 株価の取得 ---------- */
@@ -102,9 +102,9 @@ async function fetchUS(ticker: string, from: string | null): Promise<{ bars: Bar
 }
 
 // 恐怖指数。VIX は Cboe の公開CSV（だめなら FRED）、日経平均VI は日経平均プロフィルの公開CSV
-const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI", FF: "米国の政策金利（FF金利）", JPR: "日本の短期金利（コール翌日物・月次）" };
+const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI", FF: "米国の政策金利（FF金利）", JPR: "日本の短期金利（コール翌日物・月次）", USDJPY: "ドル円", US10Y: "米国の10年金利", T10Y2Y: "米国の長短金利差（10年−2年）", WTI: "原油（WTI）", BEI: "米国の期待インフレ率（10年）", UNRATE: "米国の失業率（月次）" };
 // FRED の公開CSV（キー不要）。金利は 0 やマイナスもあるので、数値ならそのまま使う
-const FRED_ID: Record<string, string> = { FF: "DFF", JPR: "IRSTCI01JPM156N" };
+const FRED_ID: Record<string, string> = { FF: "DFF", JPR: "IRSTCI01JPM156N", USDJPY: "DEXJPUS", US10Y: "DGS10", T10Y2Y: "T10Y2Y", WTI: "DCOILWTICO", BEI: "T10YIE", UNRATE: "UNRATE" };
 async function fredSeries(id: string): Promise<Bar[]> {
   const out: Bar[] = [];
   for (const line of (await getText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}`)).split(/\r?\n/)) {
@@ -216,6 +216,7 @@ const US_TIMED = (key: string) => !key.startsWith("JP:") && key !== "IX:NKVI" &&
 function withRegime(market: Market, cfgIn: any) {
   const cfg: any = normalizeCfg(cfgIn);
   for (const f of cfg.regime.filters) {
+    if (!f.key) continue; // 季節の条件はデータを使わない
     const [m, sym] = f.key.split(":");
     f.key = `${m}:${cleanSymbol(m as Market, sym)}`;
     f.lag = market === "JP" && US_TIMED(f.key); // 米国の終値は日本の引け後に出る
@@ -228,7 +229,7 @@ function withRegime(market: Market, cfgIn: any) {
 }
 // 売買する銘柄のほかに必要なデータ（相場フィルターの条件、恐怖指数を使う戦略）
 const extraKeys = (cfg: any): string[] => [...new Set([
-  ...(cfg.regime?.mode === "auto" ? cfg.regime.filters.map((f: any) => f.key) : []),
+  ...(cfg.regime?.mode === "auto" ? cfg.regime.filters.map((f: any) => f.key).filter(Boolean) : []),
   ...((STRATEGIES as any)[cfg.strategy]?.needsVol && cfg.fearSym ? ["IX:" + cfg.fearSym] : []),
 ])] as string[];
 // data["US:GLD"] や data["IX:VIX"] のような名前で足す
@@ -331,7 +332,8 @@ async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
   if (r.state.halted) { update.active = false; update.halted_reason = r.state.haltReason; }
   await db.from("st_bots").update(update).eq("id", bot.id);
   const summary = runSummary(bot, r);
-  if (summary) { try { await notify(bot.user_id, { title: `株ラボ｜${bot.name}`, body: summary, tag: `bot-${bot.id}`, url: "./#paper" }); } catch (e) { console.error(e); } }
+  // 名前が「（動作テスト）」で始まるボットは通知しない
+  if (summary && !String(bot.name).startsWith("（動作テスト）")) { try { await notify(bot.user_id, { title: `株ラボ｜${bot.name}`, body: summary, tag: `bot-${bot.id}`, url: "./#paper" }); } catch (e) { console.error(e); } }
   return { processed: days, trades: r.trades.length, halted: r.state.halted };
 }
 
