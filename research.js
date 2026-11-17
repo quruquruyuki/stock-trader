@@ -1,4 +1,4 @@
-import { normalizeCfg, runDays, initialState } from "./engine.js";
+import { normalizeCfg, runDays, initialState, exitTax } from "./engine.js";
 
 /* ---------- バックテスト ---------- */
 // opts.from（YYYY-MM-DD）より前のデータは、シグナル計算の助走にだけ使う。opts.to までで止める
@@ -9,10 +9,22 @@ export function backtest(cfgIn, data, opts = {}) {
     if (opts.from) { const d = new Date(opts.from + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 1); st.lastDate = d.toISOString().slice(0, 10); }
     return st;
   };
-  const o = { applyHalts: false, toDate: opts.to || null };
-  const main = runDays(cfg, start(), data, o);
-  const bench = runDays({ ...cfg, strategy: "hold", params: {}, side: "long", slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, sizeMode: "pct", regime: { mode: "off" } }, start(), data, o);
-  return { cfg, ...main, bearPct: main.equity.length ? main.bearDays / main.equity.length * 100 : 0, metrics: metrics(main.equity, main.trades, cfg.initialCash), bench: { equity: bench.equity, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
+  const o = { applyHalts: false, toDate: opts.to || null, sig: opts.sig, bearMap: opts.bearMap };
+  // 最後の日に全部売ったとして、税金を引いた資産で評価する（買い持ちも同じ）
+  const settle = r => {
+    const tax = exitTax(cfg, r.state);
+    if (tax && r.equity.length) { const L = r.equity.length - 1; r.equity = [...r.equity.slice(0, L), { ...r.equity[L], equity: r.equity[L].equity - tax }]; }
+    r.taxTotal = (r.state.taxTotal || 0) + tax;
+    return r;
+  };
+  const main = settle(runDays(cfg, start(), data, o));
+  const out = { cfg, ...main, bearPct: main.equity.length ? main.bearDays / main.equity.length * 100 : 0, metrics: metrics(main.equity, main.trades, cfg.initialCash) };
+  if (opts.noBench) return out;
+  // 比べる相手は、レバレッジなしで買って持ち続けた場合（税金は同じ口座の条件で）
+  // opts.benchSym があれば、その銘柄（指数ETFなど）を持ち続けた場合と比べる
+  const bsyms = opts.benchSym && data[opts.benchSym]?.length ? [opts.benchSym] : cfg.symbols;
+  const bench = settle(runDays({ ...cfg, symbols: bsyms, strategy: "hold", params: {}, side: "long", slPct: 0, tpPct: 0, maxTradesPerDay: 100, trendMa: 0, sizeMode: "pct", maxPosPct: 100, lot: bsyms === cfg.symbols ? cfg.lot : 1, lev: 1, regime: { mode: "off" } }, start(), data, { applyHalts: false, toDate: opts.to || null }));
+  return { ...out, bench: { equity: bench.equity, taxTotal: bench.taxTotal, metrics: metrics(bench.equity, bench.trades, cfg.initialCash) } };
 }
 
 export function metrics(equity, trades, initial) {
@@ -67,10 +79,14 @@ export function segmentize(dates) {
   return { unit, segs };
 }
 // 区間ごとの損益（%）。区間の始まりは、ひとつ前の区間の最後の資産（最初は元本）
+// 日付で区間を合わせるので、比べる相手と日付の並びが少しちがっても使える
 export function segReturns(equity, segs, initial) {
+  const lastAtOrBefore = d => { let lo = 0, hi = equity.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (equity[m].d <= d) { ans = m; lo = m + 1; } else hi = m - 1; } return ans; };
   return segs.map(g => {
-    const base = g.i0 > 0 ? equity[g.i0 - 1]?.equity : initial, end = equity[g.i1]?.equity;
-    return base > 0 && end != null ? (end / base - 1) * 100 : null;
+    const j0 = lastAtOrBefore(g.from) , i1 = lastAtOrBefore(g.to);
+    const b0 = j0 >= 0 && equity[j0].d < g.from ? j0 : j0 - 1; // 区間の始まりより前の最後の日
+    const base = b0 >= 0 ? equity[b0].equity : initial, end = i1 >= 0 ? equity[i1].equity : null;
+    return base > 0 && end != null && i1 >= 0 && equity[i1].d >= g.from ? (end / base - 1) * 100 : null;
   });
 }
 

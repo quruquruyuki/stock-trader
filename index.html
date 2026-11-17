@@ -213,7 +213,10 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <label class="lab" for="btSymbols">銘柄（カンマ区切り・10銘柄まで）</label>
           <input id="btSymbols" class="in" placeholder="7203, 6758" autocapitalize="characters" autocomplete="off">
           <div class="chips" id="btRecent"></div>
+          <div class="chips hidden" id="btRotPre"></div>
           <p class="hint" id="btSymHint">4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）</p>
+          <label class="lab" for="btBench" style="margin-top:10px">比べる相手</label>
+          <select id="btBench" class="in"><option value="index">指数を持ち続けた場合</option><option value="self">入れた銘柄を持ち続けた場合</option></select>
         </div>
         <div class="row" style="margin-bottom:0">
           <span class="lab">期間</span>
@@ -258,6 +261,12 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <div><label class="lab" for="btSizeVal" id="btSizeLab">1銘柄に使う上限（%）</label><input id="btSizeVal" class="in num" inputmode="decimal"></div>
         </div>
         <p class="hint" id="btSizeHint"></p>
+        <div class="row grid2" style="margin:14px 0 0">
+          <div><label class="lab" for="btAcct">口座（税金）</label><select id="btAcct" class="in"><option value="tokutei">特定口座（利益の20.315%）</option><option value="nisa">NISA（非課税）</option><option value="none">税金を考えない</option></select></div>
+          <div><label class="lab" for="btLev">レバレッジ</label><select id="btLev" class="in"><option value="1">なし（1倍）</option><option value="1.5">1.5倍</option><option value="2">2倍</option><option value="3">3倍</option></select></div>
+        </div>
+        <div class="row hidden" id="btLevBox" style="margin:10px 0 0"><label class="lab" for="btLevCost">レバレッジ型ETFの経費・金利（年%）</label><input id="btLevCost" class="in num" inputmode="decimal" value="1"></div>
+        <p class="hint" id="btAcctHint"></p>
       </div>
 
       <div class="card">
@@ -293,7 +302,10 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
         <h2>組み合わせを自動で探す</h2>
         <p class="hint" style="margin:0 0 12px">上の銘柄・期間・資金の設定のまま、すべての戦略 × 相場フィルター（なし＋各条件1つずつ）を一気に試し、年ごと（短い期間は半年・3か月ごと）に「買って持ち続ける」と比べます。</p>
         <span class="lab">何を優先して並べるか（結果が出たあとも切り替えられます）</span>
-        <div class="seg wrap" id="exPrio" style="margin-bottom:12px"><button data-v="balance" class="on">区間の勝ち数</button><button data-v="ret">損益</button><button data-v="dd">下落の小ささ</button><button data-v="sharpe">効率</button><button data-v="calmar">年率÷下落</button></div>
+        <div class="seg wrap" id="exPrio" style="margin-bottom:12px"><button data-v="half" class="on">指数並み・下落半分</button><button data-v="balance">区間の勝ち数</button><button data-v="ret">損益</button><button data-v="dd">下落の小ささ</button><button data-v="sharpe">効率</button><button data-v="calmar">年率÷下落</button></div>
+        <label class="lab" for="exAct">相場フィルターで「弱気」の日の動き</label>
+        <select id="exAct" class="in" style="margin-bottom:6px"><option value="exit">持ち株も売って待つ（下落を避ける）</option><option value="nobuy">新しく買わない（持ち株はそのまま）</option><option value="both">両方試す（時間が2倍かかります）</option></select>
+        <p class="hint" style="margin:0 0 12px">「買って持ち続ける＋相場フィルター」（ふだんは持ち、条件のときだけ降りる）と、主な戦略の日数を長めにした設定も一緒に試します。</p>
         <button class="btn ghost" id="exRun">自動で探す</button>
         <div id="exOut"></div>
       </div>

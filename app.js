@@ -1,5 +1,5 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg } from "./engine.js";
+import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg, regimeMap, precomputeSignals } from "./engine.js";
 import { GRIDS, backtest, sweep, segmentize, segReturns } from "./research.js";
 
 const CFG = window.ST_CONFIG;
@@ -160,6 +160,7 @@ const STRAT_HELP = {
   fibo: { how: "直近N日の上昇（安値→高値）に対して、フィボナッチの比率（38.2%・50%・61.8%）だけ下げた水準を自動で求めます。その水準まで押して、陽線で戻したら買い。目標（前の高値など）に届くか、元の安値を割るか、60日たったら売ります。", good: "上昇トレンドの途中の押し目。", weak: "下落への転換。押し目のつもりがそのまま下げ続けます。", tip: "61.8%は深い押し目、38.2%は浅い押し目です。描画ツールのフィボナッチ・リトレースメントを自動で引いている、と考えてください。" },
   candle: { how: "ローソク足の形（包み足、ハンマー、明けの明星、赤三兵など）を自動で見つけ、出た翌日の始値で入ります。反対向きのパターンが出るか、決めた日数たったら手じまいます。反転を示す形は、その前に下げている（10日線より下）ときだけ数えます。", good: "下げたあとの反発、上げたあとの反落の「変わり目」。", weak: "形だけで中身のない動き。1本や2本の足は偶然でもよく出ます。", tip: "1つの形だけだと回数が少ないので、まず「すべて」で試し、そのあと形ごとに比べるのがおすすめです。「（空売り向け）」の形は、細かい設定で「空売り」にして使います。" },
   chartpat: { how: "左右の足より高い「山」と低い「谷」を自動で見つけ、ダブルボトムや逆三尊などの形ができたかを調べます。形ができたあと、ネックライン（形の中の山や谷の線）を抜けたら入ります。形の高さぶん進んだら利確、形の端を逆に抜けたら損切りです。", good: "底打ちや天井打ちの場面。教科書どおりの形がはっきり出る銘柄。", weak: "形ができても抜けずに崩れる相場。判定は機械的なので、人の目で見る形とずれることがあります。", tip: "山・谷の幅を大きくすると、数か月単位の大きな形だけを見ます。高さのずれ（%）を大きくすると、ゆるい形も数えます。" },
+  rotation: { how: "入れた銘柄（たとえば米国株SPY・長期債TLT・金GLD）の直近N日の上昇率を比べ、上位だけを持ちます。月に1回（または週に1回・毎日）入れかえます。上昇率が「基準」以下なら、どれも持たずに現金で待ちます（デュアル・モメンタムと呼ばれる考え方）。", good: "株が大きく下げる時期に、債券や金が上がっている場面（2008年など）。株の大きな下げを避けやすくなります。", weak: "株も債券も同時に下がる時期（2022年など）や、強いものが頻繁に入れかわる相場。", tip: "銘柄は2つ以上入れてください。下のボタンで代表的な組み合わせを入れられます。比べる期間は6か月（126日）〜1年（252日）が定番です。" },
   hold: { how: "最初に買って、そのまま持ち続けます。売買はしません。", good: "長期で上がる市場。手数料も手間もかからず、多くの戦略はこれに勝てません。", weak: "長い下落相場。下げをそのまま受けます。", tip: "ほかの戦略の「ものさし」です。結果の画面の「買って持ち続けた場合」と同じものです。" },
 };
 
@@ -258,6 +259,23 @@ const SIZE = {
   risk: { lab: "1回で負けてよい額（資産の%）", def: () => 1, hint: "損切りにかかったときの損が、資産のこの割合になるように株数を逆算します（例：資産100万円・1%・損切り5%なら、20万円ぶん買う）。損切り幅が広いほど買う量が減ります。「細かい設定」で損切りを入れてください。" },
 };
 const sizeText = (cfg, m) => cfg.sizeMode === "cash" && cfg.sizeVal ? `1回 ${money(cfg.sizeVal, m)}` : cfg.sizeMode === "shares" && cfg.sizeVal ? `1回 ${cfg.sizeVal}株` : cfg.sizeMode === "risk" && cfg.sizeVal ? `損切り時の損が資産の${cfg.sizeVal}%になる量` : `資産の${cfg.maxPosPct}%まで`;
+// 口座とレバレッジの注意書き
+function renderAcct() {
+  const lev = Number($("btLev").value) || 1, nisa = $("btAcct").value === "nisa", short = $("btSide").value === "short";
+  $("btLevBox").classList.toggle("hidden", lev <= 1);
+  const t = [];
+  if ($("btAcct").value === "tokutei") t.push("利益が出た手じまいのたびに20.315%を引き、同じ年の損失とは相殺します。買い持ちも最後の日に売った前提で同じく税金を引いて比べます。");
+  if (nisa && (lev > 1 || short)) t.push("NISAでは空売りはできず、レバレッジ型ETFも成長投資枠の対象外です。この組み合わせは特定口座で考えてください。");
+  if (lev > 1) t.push(`指数の${lev}倍で毎日動くETF（米国株ならSPYに対するSSOなど）を想定して計算します。下落も${lev}倍になり、上下を繰り返すと目減りします。`);
+  $("btAcctHint").textContent = t.join(" ");
+}
+// 資産の乗り換えのときの銘柄の組み合わせ例
+const ROT_PRESETS = { US: [["株・債券・金", "SPY, TLT, GLD"], ["米国株・ハイテク・債券・金", "SPY, QQQ, TLT, GLD"], ["米国・先進国・新興国・債券・金", "SPY, EFA, EEM, TLT, GLD"]], JP: [["日本株・国内債券・金", "1306, 2510, 1328"], ["日本株・外国株・外国債券・金", "1306, 1550, 2511, 1328"]] };
+function renderRotPre() {
+  const on = !!STRATEGIES[$("btStrategy").value]?.multi;
+  $("btRotPre").classList.toggle("hidden", !on);
+  $("btRotPre").innerHTML = on ? ROT_PRESETS[market].map(([l, v]) => `<button data-v="${esc(v)}">${esc(l)}</button>`).join("") : "";
+}
 function renderSize(reset) {
   const S = SIZE[$("btSize").value];
   $("btSizeLab").textContent = typeof S.lab === "function" ? S.lab(market) : S.lab;
@@ -267,6 +285,7 @@ function renderSize(reset) {
 function renderParams() {
   const st = STRATEGIES[$("btStrategy").value];
   $("btDesc").textContent = st.desc;
+  renderRotPre();
   const H = STRAT_HELP[$("btStrategy").value];
   $("btHelp").innerHTML = H ? `<dl><dt>しくみ</dt><dd>${H.how}</dd><dt>向いている相場</dt><dd>${H.good}</dd><dt>苦手な相場</dt><dd>${H.weak}</dd><dt>使い方のコツ</dt><dd>${H.tip}</dd></dl>` : "";
   $("btParams").innerHTML = st.params.map(p => p.options
@@ -285,6 +304,7 @@ function readCfg() {
     initialCash: n("btCash"), lot: n("btLot"), sizeMode: $("btSize").value, sizeVal: $("btSize").value === "pct" ? 0 : n("btSizeVal"), slPct: n("btSl"), tpPct: n("btTp"),
     feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: $("btSize").value === "pct" ? n("btSizeVal") : 100, trendMa: n("btTrend"),
     side: $("btSide").value, borrowPct: n("btBorrow"),
+    taxPct: { tokutei: 20.315, nisa: 0, none: 0 }[$("btAcct").value] ?? 0, lev: Number($("btLev").value) || 1, levCostPct: n("btLevCost"),
     fearSym: STRATEGIES[strategy].needsVol ? $("btFearSym").value : "", fearLag: market === "JP" && $("btFearSym").value === "VIX",
     regime: { mode: rgRows.length ? "auto" : "off", action: $("btRgAct").value, filters: rgRows.map(r => rgFilter(r, market)) },
   });
@@ -330,9 +350,10 @@ $("btRun").onclick = async () => {
     const ok = cfg.symbols.filter(s => data[s]?.length);
     const errText = Object.entries(errors).map(([s, e]) => `${s}：${e}`).join("\n");
     if (!ok.length) throw new Error(errText || "株価が取得できませんでした");
-    const res = backtest({ ...cfg, symbols: ok }, data, { from: start });
+    await addBench(market, data, from);
+    const res = backtest({ ...cfg, symbols: ok }, data, { from: start, benchSym: benchKey(market) });
     if (!res.equity.length) throw new Error("この期間のデータがありません。期間を「全部」にして試してください");
-    lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period, start, sweepRows: null };
+    lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period, start, sweepRows: null, bname: benchName(market) };
     $("swOut").innerHTML = "";
     renderBT(errText);
     saveForm(); addHist(lastBT);
@@ -343,7 +364,7 @@ $("btRun").onclick = async () => {
 };
 
 /* ---------- フォームの保存・呼び出し・クリア ---------- */
-const FORM_IDS = ["btSymbols", "btStrategy", "btFearSym", "btRgAct", "btCash", "btLot", "btSize", "btSizeVal", "btSl", "btTp", "btSide", "btBorrow", "btTrend", "btFee", "btSlip"];
+const FORM_IDS = ["btBench", "btAcct", "btLev", "btLevCost", "btSymbols", "btStrategy", "btFearSym", "btRgAct", "btCash", "btLot", "btSize", "btSizeVal", "btSl", "btTp", "btSide", "btBorrow", "btTrend", "btFee", "btSlip"];
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* 保存できなくても動く */ } } };
 function getForm() {
   const f = { market, period, params: {}, rg: rgRows.map(r => ({ preset: r.preset, role: r.role, val: r.val })) };
@@ -364,11 +385,11 @@ function setForm(f) {
   for (const id of FORM_IDS) if (id !== "btStrategy" && id !== "btSize" && f[id] != null && f[id] !== "") $(id).value = f[id];
   $("btSymbols").value = f.btSymbols || "";
   rgRows = (f.rg || []).filter(r => RG_PRESETS[r.preset]).slice(0, RG_MAX).map(r => ({ preset: r.preset, role: r.role === "only" ? "only" : "avoid", val: Number(r.val) || 0, market: m }));
-  renderRg(); renderRecent();
+  renderRg(); renderRecent(); renderAcct(); renderRotPre();
 }
 const saveForm = () => store.set("st-form", getForm());
 function clearForm() {
-  setForm({ market, period: 2, btStrategy: "sma", btRgAct: "nobuy", btSize: "pct", btSl: "0", btTp: "0", btSide: "long", btBorrow: "1", btTrend: "0", btFee: "0", btSlip: "0.1" });
+  setForm({ market, period: 2, btBench: "index", btAcct: "tokutei", btLev: "1", btLevCost: "1", btStrategy: "sma", btRgAct: "nobuy", btSize: "pct", btSl: "0", btTp: "0", btSide: "long", btBorrow: "1", btTrend: "0", btFee: "0", btSlip: "0.1" });
   $("btErr").textContent = ""; $("exOut").innerHTML = "";
   saveForm(); toast("設定をクリアしました");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -393,9 +414,27 @@ function renderRecent() {
   $("btRecent").innerHTML = seen.slice(0, 8).map(s => `<button data-s="${esc(s)}">${esc(symLabel(market, s))}</button>`).join("");
 }
 
+// 比べる相手の指数（米国株は S&P500 の SPY、日本株は TOPIX 連動の 1306）
+const benchKey = m => $("btBench").value === "index" ? (m === "JP" ? "JP:1306" : "US:SPY") : null;
+const benchName = m => $("btBench").value === "index" ? (m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）") : "入れた銘柄";
+async function addBench(m, data, from) {
+  const k = benchKey(m); if (!k || data[k]) return;
+  const [km, ks] = k.split(":"), v = await getBars(km, [ks], from);
+  if (v.data[ks]?.length) data[k] = v.data[ks];
+}
+
 /* ---------- 自動探索の結果（優先する見方で並べかえる） ---------- */
 let exState = null;
+// 自動探索で、初期値に加えて試す「長め」の設定
+const EX_VARIANTS = {
+  sma: [{ short: 50, long: 200 }], ema: [{ short: 50, long: 200 }], tma: [{ short: 20, mid: 50, long: 200 }],
+  macd: [{ fast: 24, slow: 52, signal: 18 }], breakout: [{ entry: 55, exit: 20 }], roc: [{ period: 200, th: 0 }],
+  supertrend: [{ period: 20, mult: 4 }], linreg: [{ period: 200, k: 2 }], keltner: [{ period: 50, mult: 2 }],
+  vwap: [{ period: 200 }], psar: [{ step: 0.01, max: 0.1 }], ichimoku: [{ tenkan: 18, kijun: 52, senkou: 104 }],
+  rotation: [{ period: 252, top: 1, th: 0, rebal: 0 }, { period: 126, top: 2, th: 0, rebal: 0 }],
+};
 const EX_PRIO = {
+  half: { label: "指数並み・下落半分", hint: "年率が買い持ちの9割以上で、最大下落が買い持ちの半分以下に近い順" },
   balance: { label: "区間の勝ち数", hint: "買い持ちに勝った区間が多い順" },
   ret: { label: "損益", hint: "全期間の損益が大きい順" },
   dd: { label: "下落の小ささ", hint: "年率が買い持ちの7割以上のうち、最大下落が小さい順" },
@@ -406,11 +445,14 @@ const calmar = M => M.maxDDPct > 0 ? M.cagrPct / M.maxDDPct : 0;
 function renderEx() {
   const out = $("exOut"), S = exState;
   if (!S) return;
-  const prio = $("exPrio").querySelector(".on")?.dataset.v || "balance";
-  const { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates } = S;
+  const prio = $("exPrio").querySelector(".on")?.dataset.v || "half";
+  const { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname } = S;
   const okRows = rows.filter(r => r.enough);
   // ★の条件と並べ方
+  const ddRatio = M => M.maxDDPct > 0 ? benchM.maxDDPct * 0.5 / M.maxDDPct : 9;
+  const cagrRatio = M => benchM.cagrPct > 0 ? M.cagrPct / (benchM.cagrPct * 0.9) : (M.cagrPct >= benchM.cagrPct ? 1 : 0);
   const pass = {
+    half: r => r.M.cagrPct >= benchM.cagrPct * 0.9 && r.M.maxDDPct <= benchM.maxDDPct * 0.5,
     balance: r => r.wins >= need && r.M.sharpe > benchM.sharpe,
     ret: r => r.M.totalPct > benchM.totalPct,
     dd: r => r.M.cagrPct >= benchM.cagrPct * 0.7 && r.M.maxDDPct < benchM.maxDDPct * 0.7,
@@ -418,6 +460,8 @@ function renderEx() {
     calmar: r => calmar(r.M) > calmar(benchM),
   }[prio];
   const key = {
+    // 条件を満たしたものは年率の高い順、満たさないものは「年率」と「下落」のうち足りないほうが近い順
+    half: r => [Math.min(cagrRatio(r.M), ddRatio(r.M), 1.0001), r.M.cagrPct],
     balance: r => [r.wins, r.median],
     ret: r => [r.M.totalPct, 0],
     dd: r => [r.M.cagrPct >= benchM.cagrPct * 0.7 ? 1 : 0, -r.M.maxDDPct],
@@ -428,19 +472,21 @@ function renderEx() {
   // 成績がまったく同じもの（フィルターが一度も効かなかったなど）は1行にまとめる
   const seen = new Map();
   for (const x of sorted) {
-    const id = `${x.r.st}|${x.r.M.totalPct.toFixed(3)}|${x.r.M.maxDDPct.toFixed(3)}|${x.r.M.trades}`;
+    const id = `${x.r.st}|${JSON.stringify(x.r.params)}|${x.r.M.totalPct.toFixed(3)}|${x.r.M.maxDDPct.toFixed(3)}|${x.r.M.trades}`;
     if (seen.has(id)) seen.get(id).same.push(x.r.c); else seen.set(id, { ...x.r, pass: x.p, same: [] });
   }
   exRows = [...seen.values()].slice(0, 15);
   const nPass = sorted.filter(x => x.p).length;
-  const metric = M => ({ balance: null, ret: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, dd: `下落 -${M.maxDDPct.toFixed(0)}%`, sharpe: `効率 ${M.sharpe.toFixed(2)}`, calmar: `${calmar(M).toFixed(2)}` })[prio];
+  const metric = M => ({ half: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, balance: null, ret: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, dd: `下落 -${M.maxDDPct.toFixed(0)}%`, sharpe: `効率 ${M.sharpe.toFixed(2)}`, calmar: `${calmar(M).toFixed(2)}` })[prio];
   const unitName = { year: "1年", half: "半年", quarter: "3か月" }[unit];
   const strip = (vals, exs) => `<div class="segs" style="grid-template-columns:repeat(${K},1fr)">${vals.map((v, i) => {
     const e = exs ? exs[i] : null, col = e == null || Math.abs(e) <= 0.5 ? "" : e > 0 ? `background:rgba(52,140,90,${Math.min(0.55, 0.12 + Math.abs(e) / 40)})` : `background:rgba(200,70,60,${Math.min(0.5, 0.1 + Math.abs(e) / 40)})`;
     return `<span style="${col}">${v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0)}</span>`;
   }).join("")}</div>`;
-  const ruleText = c => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ売買" : "は控える");
+  const ruleText = (c, act) => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ持つ" : "は降りる") + (act === "nobuy" ? "（新規だけ止める）" : "");
+  const stName = r => (r.st === "hold" ? "買って持ち続ける" : STRATEGIES[r.st].label) + (r.alt ? `（${shortParams(r.st, r.params)}）` : "");
   const passText = {
+    half: `年率が買い持ちの9割以上（${(benchM.cagrPct * 0.9).toFixed(1)}%以上）で、最大下落が買い持ちの半分以下（-${(benchM.maxDDPct * 0.5).toFixed(0)}%以内）`,
     balance: `${K}区間のうち${need}区間以上で買い持ちに勝ち、全体の効率も上回った`,
     ret: "全期間の損益で買い持ちを上回った",
     dd: `年率が買い持ちの7割以上（${(benchM.cagrPct * 0.7).toFixed(1)}%以上）で、最大下落が買い持ちの7割未満（-${(benchM.maxDDPct * 0.7).toFixed(0)}%より小さい）`,
@@ -452,13 +498,15 @@ function renderEx() {
     <div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(dates[dates.length - 1])}</span>）。並び：<b>${EX_PRIO[prio].hint}</b>。<br>
     ${passText}のは <b>${nPass}通り</b>。${nPass === 0 ? "条件を満たすものはありませんでした。下は惜しかった順です。" : ""}</div>
     <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
-    <div class="segrow base"><div class="t"><span>買って持ち続けた場合</span><span class="num">${prio === "balance" ? "" : `<b>${metric(benchM)}</b>`}<span class="${cls(benchM.totalPct)}">${pct(benchM.totalPct)}</span><small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
-    ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<small>${esc(ruleText(r.c))}${r.same.length ? `<br>（同じ結果：${esc(r.same.slice(0, 3).map(ruleText).join("、"))}${r.same.length > 3 ? ` ほか${r.same.length - 3}件` : ""}）` : ""}</small></span><span class="num">${right(r.M, r.wins)}</span></div>${strip(r.seg, r.ex)}</div>`).join("")}
+    <div class="segrow base"><div class="t"><span>${esc(bname)}を持ち続けた場合</span><span class="num">${prio === "balance" ? "" : `<b>${metric(benchM)}</b>`}<span class="${cls(benchM.totalPct)}">${pct(benchM.totalPct)}</span><small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
+    ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(stName(r))}<small>${esc(ruleText(r.c, r.act))}${r.same.length ? `<br>（同じ結果：${esc(r.same.slice(0, 3).map(c => ruleText(c, r.act)).join("、"))}${r.same.length > 3 ? ` ほか${r.same.length - 3}件` : ""}）` : ""}</small></span><span class="num">${right(r.M, r.wins)}</span></div>${strip(r.seg, r.ex)}</div>`).join("")}
     <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
   out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
     const r = exRows[Number(tr.dataset.i)];
     $("btStrategy").value = r.st; renderParams();
+    for (const [k, v] of Object.entries(r.params || {})) { const el = $("bp_" + k); if (el) el.value = v; }
     rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
+    if (r.c) $("btRgAct").value = r.act;
     $("btRun").click();
   });
 }
@@ -487,35 +535,53 @@ $("exRun").onclick = async () => {
     }
     const filters = [null, ...cands.filter(c => !c.f.key || data[c.f.key])];
     const skipped = cands.filter(c => c.f.key && !data[c.f.key]).map(c => c.P.label);
-    // 全期間を1回ずつ検証し、年ごと（短い期間は半年・四半期ごと）の区間に分けて買い持ちと比べる
+    // 全期間を1回ずつ検証し、年ごと（短い期間は半年・四半期ごと）の区間に分けて買い持ち（1倍）と比べる
     const cfg0 = { ...base, symbols: ok, regime: { mode: "off" } };
-    const all = backtest({ ...cfg0, strategy: "hold", params: {} }, data, { from: start });
-    const dates = all.equity.map(e => e.d);
+    await addBench(m, data, from);
+    const benchRun = backtest({ ...cfg0, strategy: "hold", params: {} }, data, { from: start, benchSym: benchKey(m) });
+    const dates = benchRun.bench.equity.map(e => e.d);
     if (dates.length < 120) throw new Error("期間が短すぎます。1年以上で試してください");
     const { unit, segs } = segmentize(dates);
-    const benchSeg = segReturns(all.equity, segs, base.initialCash), benchM = all.metrics;
+    const benchSeg = segReturns(benchRun.bench.equity, segs, base.initialCash), benchM = benchRun.bench.metrics;
     const K = segs.length, need = Math.max(2, Math.ceil(K * 0.6));
-    const strategies = Object.keys(STRATEGIES).filter(k => k !== "hold" && (!STRATEGIES[k].needsVol || data["IX:" + (m === "JP" ? "NKVI" : "VIX")]));
+    // 試す戦略：各戦略の初期値と、主な戦略の「長め」の設定。買い持ち＋フィルターも入れる
+    const variants = [];
+    for (const st of Object.keys(STRATEGIES)) {
+      const S = STRATEGIES[st];
+      if (S.needsVol && !data["IX:" + (m === "JP" ? "NKVI" : "VIX")]) continue;
+      if (S.multi && ok.length < 2) continue;
+      variants.push({ st, params: Object.fromEntries(S.params.map(p => [p.key, p.def])), alt: false });
+      for (const v of EX_VARIANTS[st] || []) variants.push({ st, params: v, alt: true });
+    }
+    const acts = $("exAct").value === "both" ? ["exit", "nobuy"] : [$("exAct").value];
+    // 相場フィルターの判定は、条件ごとに1回だけ計算しておく
+    const allDates = [...new Set(ok.flatMap(s => data[s].map(b => b.d)))].sort();
+    const maps = new Map(filters.filter(Boolean).map(c => [c, regimeMap({ ...cfg0, regime: { mode: "auto", filters: [c.f] } }, data, allDates)]));
     const rows = [];
-    for (const [si, st] of strategies.entries()) {
-      busy($("exRun"), true, `計算中… ${si + 1}/${strategies.length}`);
+    for (const [vi, v] of variants.entries()) {
+      busy($("exRun"), true, `計算中… ${vi + 1}/${variants.length}`);
       await tick();
-      const params = Object.fromEntries(STRATEGIES[st].params.map(p => [p.key, p.def]));
+      const cfgS = { ...cfg0, strategy: v.st, params: v.params, fearSym: STRATEGIES[v.st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false };
+      const sig = precomputeSignals(cfgS, data);
       for (const c of filters) {
-        const cfg = { ...cfg0, strategy: st, params, fearSym: STRATEGIES[st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false,
-          regime: c ? { mode: "auto", action: base.regime.action, filters: [c.f] } : { mode: "off" } };
-        const r = backtest(cfg, data, { from: start });
-        if (!r.metrics || r.equity.length !== dates.length) continue;
-        const seg = segReturns(r.equity, segs, base.initialCash);
-        const ex = seg.map((v, i) => v == null || benchSeg[i] == null ? null : v - benchSeg[i]);
-        const wins = ex.filter(v => v != null && v > 0.5).length; // 0.5ポイント以内の差は引き分け
-        const sorted = ex.filter(v => v != null).sort((x, y) => x - y), median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
-        const enough = r.metrics.roundTrips >= 3;
-        const pass = enough && wins >= need && r.metrics.sharpe > benchM.sharpe;
-        rows.push({ st, c, M: r.metrics, seg, ex, wins, median, pass, enough });
+        // 買い持ちでフィルターなしは比べる相手と同じなので、レバレッジがあるときだけ試す
+        if (v.st === "hold" && !c && !(base.lev > 1)) continue;
+        for (const act of c ? acts : ["exit"]) {
+          // 買い持ち＋「新しく買わない」は、一度買ったら売らないので試さない
+          if (v.st === "hold" && act === "nobuy") continue;
+          const cfg = { ...cfgS, regime: c ? { mode: "auto", action: act, filters: [c.f] } : { mode: "off" } };
+          const r = backtest(cfg, data, { from: start, sig, bearMap: c ? maps.get(c) : undefined, noBench: true });
+          if (!r.metrics || r.equity.length < dates.length * 0.9) continue;
+          const seg = segReturns(r.equity, segs, base.initialCash);
+          const ex = seg.map((x, i) => x == null || benchSeg[i] == null ? null : x - benchSeg[i]);
+          const wins = ex.filter(x => x != null && x > 0.5).length; // 0.5ポイント以内の差は引き分け
+          const sorted = ex.filter(x => x != null).sort((x, y) => x - y), median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+          const enough = v.st === "hold" ? r.metrics.trades >= 1 : r.metrics.roundTrips >= 3;
+          rows.push({ st: v.st, params: v.params, alt: v.alt, act, c, M: r.metrics, seg, ex, wins, median, enough });
+        }
       }
     }
-    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates };
+    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname: benchName(m) };
     renderEx();
   } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   finally { busy($("exRun"), false); }
@@ -534,7 +600,7 @@ function renderBT(errText) {
     k("勝率", M.winPct == null ? "—" : M.winPct.toFixed(0) + "%", "売った取引のうち") +
     k("シャープ", M.sharpe.toFixed(2), "値動きあたりの効率");
   const diff = M.totalPct - B.totalPct;
-  $("btCmp").innerHTML = `買って持ち続けた場合は <b class="num ${cls(B.totalPct)}">${pct(B.totalPct)}</b>（最大下落 <span class="num">-${B.maxDDPct.toFixed(1)}%</span>）。`
+  $("btCmp").innerHTML = `${esc(lastBT.bname || "入れた銘柄")}を買って持ち続けた場合は <b class="num ${cls(B.totalPct)}">${pct(B.totalPct)}</b>（最大下落 <span class="num">-${B.maxDDPct.toFixed(1)}%</span>）。`
     + `この戦略は <b class="num ${cls(diff)}">${diff >= 0 ? "上回り" : "下回り"}（${pct(diff)}）</b>`
     + (M.maxDDPct < B.maxDDPct ? `、下落は小さく抑えられています。` : `、下落は同じか大きめです。`);
   drawChart($("btEqChart"), [
@@ -543,6 +609,9 @@ function renderBT(errText) {
   ], { m });
   $("btSymSeg").innerHTML = cfg.symbols.map((s, i) => `<button data-s="${esc(s)}" class="${i ? "" : "on"}">${esc(symLabel(m, s))}</button>`).join("");
   drawPx(cfg.symbols[0]);
+  if (cfg.taxPct > 0) $("btCmp").innerHTML += `<br>税金（${cfg.taxPct}%）を引いたあとの成績です。この戦略の税金 <span class="num">${money(res.taxTotal || 0, m)}</span>、買い持ちは最後の日に売った場合 <span class="num">${money(res.bench.taxTotal || 0, m)}</span>。`;
+  else $("btCmp").innerHTML += `<br>税金は${$("btAcct").value === "nisa" ? "かからない（NISA）" : "考えていない"}計算です。`;
+  if (cfg.lev > 1) $("btCmp").innerHTML += `<br>レバレッジ${cfg.lev}倍の型ETFを想定（毎日、値動きの${cfg.lev}倍・経費 年${cfg.levCostPct}%）。売買の判断は元の値動きで行います。買い持ちとの比較は1倍のままです。`;
   if (cfg.regime.mode !== "off") $("btCmp").innerHTML += `<br>相場フィルター：期間の <b class="num">${res.bearPct.toFixed(0)}%</b> の日を弱気と判定（${esc(regimeText(cfg))}）。`;
   const notes = [...(errText ? [errText] : []), ...res.notes.filter(n => !n.msg.startsWith("相場フィルター")).slice(-5).map(n => `${fmtD(n.d)} ${n.msg}`)];
   $("btNotes").innerHTML = notes.length ? `<div class="notes">${notes.map(esc).join("<br>")}</div>` : "";
@@ -569,7 +638,7 @@ function tradeTable(trades, m) {
 
 const paramText = cfg => {
   const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => p.options ? p.options[cfg.params[p.key]] : `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
-  return `${cfg.side === "short" ? "【空売り】" : ""}${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${cfg.fearSym ? "・" + VOL_NAME[cfg.fearSym] : ""}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
+  return `${cfg.side === "short" ? "【空売り】" : ""}${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${cfg.fearSym ? "・" + VOL_NAME[cfg.fearSym] : ""}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}${cfg.lev > 1 ? `【${cfg.lev}倍】` : ""}`;
 };
 const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
 const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
@@ -1006,6 +1075,8 @@ sb.auth.onAuthStateChange((_ev, session) => {
 $("btStrategy").innerHTML = Object.entries(STRATEGY_GROUPS).map(([g, gl]) => `<optgroup label="${esc(gl)}">${Object.entries(STRATEGIES).filter(([, v]) => v.group === g).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")}</optgroup>`).join("");
 $("btStrategy").onchange = renderParams;
 $("btSize").onchange = () => renderSize(true);
+$("btAcct").onchange = $("btLev").onchange = $("btSide").onchange = renderAcct;
+$("btRotPre").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { $("btSymbols").value = b.dataset.v; saveForm(); } });
 $("rgAdd").onchange = e => {
   const k = e.target.value, P = RG_PRESETS[k];
   if (P && rgRows.length < RG_MAX) rgRows.push({ preset: k, role: P.role, val: P.def(market), market });
@@ -1028,8 +1099,11 @@ renderHist(); renderRecent();
 $("vBT").addEventListener("change", e => { if (e.target.closest("input,select")) saveForm(); });
 $("btClear").onclick = clearForm;
 // 自動探索の並べ方。選んだものを覚えておき、結果があれば並べかえる
-{ const v = store.get("st-exprio", "balance"); [...$("exPrio").children].forEach(b => b.classList.toggle("on", b.dataset.v === v)); }
+{ const v = store.get("st-exprio", "half"); [...$("exPrio").children].forEach(b => b.classList.toggle("on", b.dataset.v === v)); }
 segInit("exPrio", v => { store.set("st-exprio", v); renderEx(); });
+$("exAct").value = store.get("st-exact", "exit");
+$("exAct").onchange = () => store.set("st-exact", $("exAct").value);
+renderAcct();
 $("histBtn").onclick = () => $("histBox").classList.toggle("hidden");
 $("histList").addEventListener("click", e => {
   const r = e.target.closest(".hrow"); if (!r) return;

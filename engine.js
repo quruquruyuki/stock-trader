@@ -285,6 +285,18 @@ export const STRATEGIES = {
       { key: "hold", label: "最長で持つ（日）", def: 60, min: 5, max: 250 },
     ],
   },
+  rotation: {
+    group: "rot",
+    label: "資産の乗り換え（強いものを持つ）",
+    desc: "入れた銘柄（例：SPY・TLT・GLD）の中から、直近N日の上昇率が高い上位だけを持ち、決まったタイミングで入れかえる。上昇率が「基準」以下なら持たずに現金で待つ。",
+    multi: true,
+    params: [
+      { key: "period", label: "比べる期間（日）", def: 126, min: 20, max: 300 },
+      { key: "top", label: "持つ数", def: 1, min: 1, max: 5 },
+      { key: "th", label: "基準（%超）", def: 0, min: -20, max: 30, step: 0.5 },
+      { key: "rebal", label: "入れかえ", def: 0, min: 0, max: 2, options: ["毎月", "毎週", "毎日"] },
+    ],
+  },
   hold: {
     group: "etc",
     label: "買って持ち続ける",
@@ -294,7 +306,7 @@ export const STRATEGIES = {
 };
 
 // 戦略の並び（画面の見出し）
-export const STRATEGY_GROUPS = { trend: "トレンドに乗る", break: "ブレイク・出来高で入る", rev: "逆張り・押し目", pat: "パターン", etc: "季節・恐怖指数・比較用" };
+export const STRATEGY_GROUPS = { trend: "トレンドに乗る", rot: "資産の乗り換え", break: "ブレイク・出来高で入る", rev: "逆張り・押し目", pat: "パターン", etc: "季節・恐怖指数・比較用" };
 
 export const DEFAULT_CFG = {
   strategy: "sma",
@@ -318,6 +330,9 @@ export const DEFAULT_CFG = {
   borrowPct: 1,        // 空売りの貸株料など（年率%）
   fearSym: "",         // 恐怖指数を使う戦略で見る指数（VIX / NKVI）
   fearLag: false,      // 日本株で VIX を見るとき、前日までの値で判定する
+  lev: 1,              // レバレッジ型ETFを想定した計算（毎日、元の値動きの lev 倍。1=使わない）
+  levCostPct: 1,       // レバレッジ型ETFの経費・金利コスト（年率%）
+  taxPct: 0,           // 税金（利益にかかる%。特定口座は 20.315、NISA は 0）。同じ年の損失とは相殺する
   trendMa: 0,          // トレンド条件：終値がこの日数の移動平均より上のときだけ持つ（0=使わない）
   // 相場フィルター（市況）。mode: off=使わない / auto=下の条件で判定 / bull=強気で固定 / bear=弱気で固定
   // action は弱気のときの動き: nobuy=新しく買わない / exit=持ち株も売って待つ / half=買う量を半分にする
@@ -359,6 +374,9 @@ export function normalizeCfg(c) {
     fearSym: ["VIX", "NKVI"].includes(cfg.fearSym) ? cfg.fearSym : "",
     fearLag: !!cfg.fearLag,
     trendMa: Math.round(num(cfg.trendMa, 0, 400, 0)),
+    lev: Math.round(num(cfg.lev, 1, 3, 1) * 2) / 2,
+    levCostPct: num(cfg.levCostPct, 0, 10, 1),
+    taxPct: num(cfg.taxPct, 0, 60, 0),
     regime: {
       mode: ["auto", "bull", "bear"].includes(cfg.regime?.mode) ? cfg.regime.mode : "off",
       action: ["exit", "half"].includes(cfg.regime?.action) ? cfg.regime.action : "nobuy",
@@ -387,7 +405,7 @@ function normalizeFilter(f, num) {
   if (f.kind === "trend") return { kind: "trend", ...base, ma: Math.round(num(f.ma, 5, 400, 200)), cond: f.cond === "above" ? "above" : "below" };
   if (f.kind === "level") return { kind: "level", ...base, op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 1000, 25) };
   // sig: key の値動きに戦略をあてはめ、その戦略が「持つ」(cond=on) / 「持たない」(off) の状態か
-  if (f.kind === "sig") return STRATEGIES[f.strat] && !STRATEGIES[f.strat].needsVol && f.strat !== "hold" ? { kind: "sig", ...base, strat: f.strat, params: normParams(f.strat, f.params), cond: f.cond === "off" ? "off" : "on" } : null;
+  if (f.kind === "sig") return STRATEGIES[f.strat] && !STRATEGIES[f.strat].needsVol && f.strat !== "hold" && !STRATEGIES[f.strat].multi ? { kind: "sig", ...base, strat: f.strat, params: normParams(f.strat, f.params), cond: f.cond === "off" ? "off" : "on" } : null;
   // osc: key の値動きから指標（rsi / adx / atrp=ATRの株価比%）を計算し、th より op=gt 上 / lt 下
   if (f.kind === "osc") return ["rsi", "adx", "atrp"].includes(f.osc) ? { kind: "osc", ...base, osc: f.osc, n: Math.round(num(f.n, 2, 200, 14)), op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 100, 50) } : null;
   if (f.kind === "dd") return { kind: "dd", ...base, op: f.op === "lt" ? "lt" : "gt", days: Math.round(num(f.days, 20, 750, 250)), th: num(f.th, 0, 90, 10) };
@@ -877,6 +895,7 @@ function rawSignals(bars, strategy, p, vol) {
     return out;
   }
   if (strategy === "chartpat") return chartSignals(bars, p);
+  if (strategy === "rotation") { for (let i = p.period; i < n; i++) out[i] = c[i - p.period] > 0 && (c[i] / c[i - p.period] - 1) * 100 > p.th ? 1 : 0; return out; }
   if (strategy === "boll") {
     const m = smaArr(c, p.period);
     let pos = 0;
@@ -973,6 +992,99 @@ function equityOf(st) {
   return e;
 }
 
+// レバレッジ型ETFを想定した値動き：毎日、前日終値からの動きを lev 倍し、経費を日割りで引く
+export function levBars(bars, lev, costPct = 1) {
+  const out = [];
+  const dayCost = costPct / 100 / 252;
+  let L = bars.length ? bars[0].c : 0;
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    if (i === 0) { out.push({ ...b }); continue; }
+    const pc = bars[i - 1].c, prevL = L;
+    const f = x => Math.max(prevL * 0.01, prevL * (1 + lev * (x / pc - 1) - dayCost));
+    L = f(b.c);
+    out.push({ d: b.d, o: f(b.o), h: Math.max(f(b.h), f(b.l)), l: Math.min(f(b.h), f(b.l)), c: L, v: b.v });
+  }
+  return out;
+}
+
+// 資産の乗り換え：入れかえの日に、直近 period 日の上昇率が高い上位 top 銘柄だけを「持つ」にする
+function rotationSignals(p, data, syms) {
+  const dates = [...new Set(syms.flatMap(s => data[s].map(b => b.d)))].sort();
+  const idx = {}, out = {};
+  for (const s of syms) { idx[s] = new Map(data[s].map((b, i) => [b.d, i])); out[s] = new Array(data[s].length).fill(0); }
+  const keyOf = D => p.rebal === 0 ? D.slice(0, 7) : p.rebal === 1 ? Math.floor((Date.parse(D) / 864e5 + 3) / 7) : D;
+  let hold = new Set(), last = null;
+  for (const D of dates) {
+    const k = keyOf(D);
+    if (k !== last) {
+      last = k;
+      const sc = syms.map(s => {
+        const i = idx[s].get(D);
+        if (i == null || i < p.period) return null;
+        const c0 = data[s][i - p.period].c;
+        return c0 > 0 ? { s, r: (data[s][i].c / c0 - 1) * 100 } : null;
+      }).filter(Boolean).sort((a, b) => b.r - a.r);
+      if (sc.length) hold = new Set(sc.slice(0, p.top).filter(x => x.r > p.th).map(x => x.s));
+    }
+    for (const s of syms) { const i = idx[s].get(D); if (i != null) out[s][i] = hold.has(s) ? 1 : 0; }
+  }
+  return out;
+}
+
+// 相場フィルターの判定を、日付ごとの表（Map: 日付 → 弱気か）にする。自動探索で同じ条件を何度も使うときの計算を省く
+export function regimeMap(cfgIn, data, dates) {
+  const cfg = normalizeCfg(cfgIn), f = bearTester(cfg.regime, data);
+  return new Map(dates.map(D => [D, f(D)]));
+}
+// 各戦略の「持ちたいか」を前もって計算する（自動探索用）
+export function precomputeSignals(cfgIn, data) {
+  const cfg = normalizeCfg(cfgIn), syms = cfg.symbols.filter(s => data[s]?.length);
+  if (cfg.strategy === "rotation") return rotationSignals(cfg.params, data, syms);
+  return Object.fromEntries(syms.map(s => [s, signals(data[s], cfg.strategy, cfg.params, cfg.trendMa, { bars: data["IX:" + cfg.fearSym], lag: cfg.fearLag })]));
+}
+
+// 相場フィルターの条件から、「その日は弱気か」を返す関数を作る（日付は古い順に聞くこと）
+function bearTester(rg, data) {
+  if (rg.mode === "bear") return () => true;
+  if (rg.mode !== "auto") return () => false;
+  // 各条件を「その日は弱気か」を返す関数にする。その日までに分かっている最後の値で判定（lag なら前日まで）
+  const tests = rg.filters.map(f => {
+    if (f.kind === "season") {
+      const inS = D => { const m = Number(D.slice(5, 7)); return f.m1 <= f.m2 ? m >= f.m1 && m <= f.m2 : m >= f.m1 || m <= f.m2; };
+      return D => f.role === "only" ? !inS(D) : inS(D);
+    }
+    const b = data[f.key];
+    if (!b?.length) return null;
+    let ip = -1, jp = -1;
+    const at = D => { while (ip + 1 < b.length && (f.lag ? b[ip + 1].d < D : b[ip + 1].d <= D)) ip++; return ip; };
+    let cond;
+    if (f.kind === "trend") { const m = smaArr(b.map(x => x.c), f.ma); cond = i => m[i] == null ? null : (f.cond === "above" ? b[i].c > m[i] : b[i].c <= m[i]); }
+    else if (f.kind === "sig") { const sg = signals(b, f.strat, f.params); cond = i => f.cond === "off" ? !sg[i] : !!sg[i]; }
+    else if (f.kind === "osc") {
+      const v = f.osc === "rsi" ? rsiArr(b.map(x => x.c), f.n) : f.osc === "adx" ? dmiArr(b, f.n).adx : atrArr(b, f.n).map((a, i) => a == null ? null : a / b[i].c * 100);
+      cond = i => v[i] == null ? null : (f.op === "gt" ? v[i] > f.th : v[i] < f.th);
+    }
+    else if (f.kind === "dd") cond = i => {
+      let hi = 0; for (let k = Math.max(0, i - f.days + 1); k <= i; k++) hi = Math.max(hi, b[k].c);
+      const dd = hi > 0 ? (hi - b[i].c) / hi * 100 : 0;
+      return f.op === "gt" ? dd >= f.th : dd <= f.th;
+    };
+    else if (f.kind === "level") cond = i => f.op === "gt" ? b[i].c > f.th : b[i].c < f.th;
+    else cond = i => {
+      const t = new Date(b[i].d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - f.days);
+      const past = t.toISOString().slice(0, 10);
+      while (jp + 1 < b.length && b[jp + 1].d <= past) jp++;
+      if (jp < 0) return null;
+      const diff = b[i].c - b[jp].c;
+      return f.dir === "up" ? diff >= f.th : diff <= -f.th;
+    };
+    // 分からない日（データ不足）は弱気にしない
+    return D => { const i = at(D); if (i < 0) return false; const c = cond(i); return c == null ? false : (f.role === "only" ? !c : c); };
+  }).filter(Boolean);
+  return D => { let bear = false; for (const t of tests) if (t(D)) bear = true; return bear; };
+}
+
 // state から始めて、data（{ 銘柄: [{d,o,h,l,c,v}, ...] }）の state.lastDate より後の日を順に処理する
 // opts.applyHalts: 安全装置（1日の損失上限・最大下落）で止めるか
 export function runDays(cfgIn, stateIn, data, opts = {}) {
@@ -980,56 +1092,37 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   const st = clone(stateIn);
   const trades = [], equity = [], notes = [];
   const syms = cfg.symbols.filter(s => data[s]?.length);
-  const idx = {}, sig = {};
+  const idx = {}, tb = {};
+  // シグナルは元の値動きで判定し、売買と評価はレバレッジを想定した値動き（lev=1 なら同じ）で行う
+  const sig = opts.sig || precomputeSignals(cfg, data);
   for (const s of syms) {
     idx[s] = new Map(data[s].map((b, i) => [b.d, i]));
-    sig[s] = signals(data[s], cfg.strategy, cfg.params, cfg.trendMa, { bars: data["IX:" + cfg.fearSym], lag: cfg.fearLag });
+    tb[s] = cfg.lev > 1 ? levBars(data[s], cfg.lev, cfg.levCostPct) : data[s];
+    // 模擬取引は毎回ちがう日からデータを読むので、前回の最後の日の値段にそろえる（レバレッジの値動きは始まりの日で水準が変わるため）
+    const an = st.levAnchor?.[s];
+    if (cfg.lev > 1 && an) {
+      const j = idx[s].get(an.d);
+      if (j != null && tb[s][j].c > 0) { const k = an.L / tb[s][j].c; tb[s] = tb[s].map(b => ({ ...b, o: b.o * k, h: b.h * k, l: b.l * k, c: b.c * k })); }
+    }
   }
   const dates = [...new Set(syms.flatMap(s => data[s].map(b => b.d)))]
     .filter(d => (!st.lastDate || d > st.lastDate) && (!opts.toDate || d <= opts.toDate)).sort();
-  // 相場フィルター：その日が「弱気」かどうか
+  // 相場フィルター：その日が「弱気」かどうか（自動探索では前もって計算した表を使う）
   const rg = cfg.regime;
-  let bearOn = () => rg.mode === "bear";
-  if (rg.mode === "auto") {
-    // 各条件を「その日は弱気か」を返す関数にする。その日までに分かっている最後の値で判定（lag なら前日まで）
-    const tests = rg.filters.map(f => {
-      if (f.kind === "season") {
-        const inS = D => { const m = Number(D.slice(5, 7)); return f.m1 <= f.m2 ? m >= f.m1 && m <= f.m2 : m >= f.m1 || m <= f.m2; };
-        return D => f.role === "only" ? !inS(D) : inS(D);
-      }
-      const b = data[f.key];
-      if (!b?.length) return null;
-      let ip = -1, jp = -1;
-      const at = D => { while (ip + 1 < b.length && (f.lag ? b[ip + 1].d < D : b[ip + 1].d <= D)) ip++; return ip; };
-      let cond;
-      if (f.kind === "trend") { const m = smaArr(b.map(x => x.c), f.ma); cond = i => m[i] == null ? null : (f.cond === "above" ? b[i].c > m[i] : b[i].c <= m[i]); }
-      else if (f.kind === "sig") { const sg = signals(b, f.strat, f.params); cond = i => f.cond === "off" ? !sg[i] : !!sg[i]; }
-      else if (f.kind === "osc") {
-        const v = f.osc === "rsi" ? rsiArr(b.map(x => x.c), f.n) : f.osc === "adx" ? dmiArr(b, f.n).adx : atrArr(b, f.n).map((a, i) => a == null ? null : a / b[i].c * 100);
-        cond = i => v[i] == null ? null : (f.op === "gt" ? v[i] > f.th : v[i] < f.th);
-      }
-      else if (f.kind === "dd") cond = i => {
-        let hi = 0; for (let k = Math.max(0, i - f.days + 1); k <= i; k++) hi = Math.max(hi, b[k].c);
-        const dd = hi > 0 ? (hi - b[i].c) / hi * 100 : 0;
-        return f.op === "gt" ? dd >= f.th : dd <= f.th;
-      };
-      else if (f.kind === "level") cond = i => f.op === "gt" ? b[i].c > f.th : b[i].c < f.th;
-      else cond = i => {
-        const t = new Date(b[i].d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - f.days);
-        const past = t.toISOString().slice(0, 10);
-        while (jp + 1 < b.length && b[jp + 1].d <= past) jp++;
-        if (jp < 0) return null;
-        const diff = b[i].c - b[jp].c;
-        return f.dir === "up" ? diff >= f.th : diff <= -f.th;
-      };
-      // 分からない日（データ不足）は弱気にしない
-      return D => { const i = at(D); if (i < 0) return false; const c = cond(i); return c == null ? false : (f.role === "only" ? !c : c); };
-    }).filter(Boolean);
-    bearOn = D => { let bear = false; for (const t of tests) if (t(D)) bear = true; return bear; };
-  }
+  const bearOn = opts.bearMap ? D => !!opts.bearMap.get(D) : bearTester(rg, data);
   let bearDays = 0;
   const slip = cfg.slipPct / 100, fee = cfg.feePct / 100;
-  const posPct = Math.min(cfg.maxPosPct / 100, 1 / Math.max(1, syms.length));
+  const posPct = Math.min(cfg.maxPosPct / 100, 1 / Math.max(1, cfg.strategy === "rotation" ? Math.min(cfg.params.top, syms.length) : syms.length));
+  // 税金：利益が出た手じまいのたびに引き、同じ年の損失が出たら戻す（特定口座の源泉徴収と同じ考え方）
+  const rate = cfg.taxPct / 100;
+  const taxOn = (D, pnl) => {
+    if (!rate) return;
+    const y = D.slice(0, 4);
+    if (st.taxYear !== y) { st.taxYear = y; st.ytdGain = 0; st.ytdTax = 0; }
+    st.ytdGain += pnl;
+    const due = Math.max(0, st.ytdGain) * rate, delta = due - st.ytdTax;
+    st.cash -= delta; st.ytdTax = due; st.taxTotal = (st.taxTotal || 0) + delta;
+  };
   // 1回に買う（空売りする）株数。どの決め方でも、手元資金と「1銘柄の上限」は超えない
   const sizeQty = (price, scale, feeMul) => {
     const eq = equityOf(st), cap = Math.min(st.cash, eq * cfg.maxPosPct / 100);
@@ -1043,7 +1136,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   };
 
   for (const D of dates) {
-    const bar = s => { const i = idx[s]?.get(D); return i == null ? null : data[s][i]; };
+    const bar = s => { const i = idx[s]?.get(D); return i == null ? null : tb[s][i]; };
 
     // 1) 前日に出した注文を、今日の始値で約定（売りを先に）
     let fills = 0;
@@ -1062,6 +1155,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
         const gain = p.qty * (p.avg - price) - f - borrow;
         st.cash += gain;
         trades.push({ d: D, symbol: o.symbol, side: "buy", qty: p.qty, price, fee: f + borrow, pnl: gain - (p.feeIn || 0), reason: o.reason });
+        taxOn(D, gain - (p.feeIn || 0));
         delete st.positions[o.symbol];
         fills++;
         continue;
@@ -1087,6 +1181,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
         const price = b.o * (1 - slip), value = p.qty * price, f = value * fee;
         st.cash += value - f;
         trades.push({ d: D, symbol: o.symbol, side: "sell", qty: p.qty, price, fee: f, pnl: value - f - p.cost, reason: o.reason });
+        taxOn(D, value - f - p.cost);
         delete st.positions[o.symbol];
         fills++;
       } else {
@@ -1129,7 +1224,7 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
       for (const s of syms) {
         const i = idx[s].get(D);
         if (i == null) continue;
-        const want = sig[s][i], c = data[s][i].c, p = st.positions[s];
+        const want = sig[s]?.[i], c = tb[s][i].c, p = st.positions[s];
         const short = cfg.side === "short", rgOn = rg.mode !== "off";
         const has = open => st.pending.some(o => o.symbol === s && isOpen(o) === open);
         if (p) {
@@ -1155,6 +1250,20 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
     st.prevEquity = eq;
     st.lastDate = D;
   }
+  if (cfg.lev > 1) {
+    st.levAnchor = st.levAnchor || {};
+    for (const s of syms) { const j = idx[s].get(st.lastDate); if (j != null) st.levAnchor[s] = { d: st.lastDate, L: tb[s][j].c }; }
+  }
   return { state: st, trades, equity, notes, bearDays };
+}
+
+// 最後の日に全部売ったとしてかかる税金（含み益と、その年の確定済みの損益を合わせて計算）
+export function exitTax(cfgIn, st) {
+  const cfg = normalizeCfg(cfgIn), rate = cfg.taxPct / 100;
+  if (!rate || !st.lastDate) return 0;
+  let unreal = 0;
+  for (const [s, p] of Object.entries(st.positions)) { const c = st.lastClose[s] ?? p.avg; unreal += p.short ? p.qty * (p.avg - c) - (p.feeIn || 0) : p.qty * c - p.cost; }
+  const same = st.taxYear === st.lastDate.slice(0, 4);
+  return Math.max(0, (same ? st.ytdGain : 0) + unreal) * rate - (same ? st.ytdTax : 0);
 }
 
