@@ -303,11 +303,63 @@ $("btRun").onclick = async () => {
     lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period, start, sweepRows: null };
     $("swOut").innerHTML = "";
     renderBT(errText);
+    saveForm(); addHist(lastBT);
     $("btOut").classList.remove("hidden");
     $("btOut").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) { $("btErr").textContent = e.message; }
   finally { busy($("btRun"), false); }
 };
+
+/* ---------- フォームの保存・呼び出し・クリア ---------- */
+const FORM_IDS = ["btSymbols", "btStrategy", "btFearSym", "btRgAct", "btCash", "btLot", "btSize", "btSizeVal", "btSl", "btTp", "btSide", "btBorrow", "btTrend", "btFee", "btSlip"];
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* 保存できなくても動く */ } } };
+function getForm() {
+  const f = { market, period, params: {}, rg: rgRows.map(r => ({ preset: r.preset, role: r.role, val: r.val })) };
+  for (const id of FORM_IDS) f[id] = $(id).value;
+  for (const p of STRATEGIES[$("btStrategy").value].params) f.params[p.key] = $("bp_" + p.key).value;
+  return f;
+}
+function setForm(f) {
+  const seg = (id, v) => [...$(id).children].forEach(x => x.classList.toggle("on", x.dataset.v === String(v)));
+  const m = f.market === "US" ? "US" : "JP";
+  rgRows = [];
+  seg("btMarket", m); setMarket(m);
+  if ([0, 1, 2, 5, 10].includes(Number(f.period))) { period = Number(f.period); seg("btPeriod", period); }
+  if (STRATEGIES[f.btStrategy]) $("btStrategy").value = f.btStrategy;
+  renderParams();
+  for (const [k, v] of Object.entries(f.params || {})) { const el = $("bp_" + k); if (el) el.value = v; }
+  if (SIZE[f.btSize]) { $("btSize").value = f.btSize; renderSize(false); }
+  for (const id of FORM_IDS) if (id !== "btStrategy" && id !== "btSize" && f[id] != null && f[id] !== "") $(id).value = f[id];
+  $("btSymbols").value = f.btSymbols || "";
+  rgRows = (f.rg || []).filter(r => RG_PRESETS[r.preset]).slice(0, RG_MAX).map(r => ({ preset: r.preset, role: r.role === "only" ? "only" : "avoid", val: Number(r.val) || 0, market: m }));
+  renderRg(); renderRecent();
+}
+const saveForm = () => store.set("st-form", getForm());
+function clearForm() {
+  setForm({ market, period: 2, btStrategy: "sma", btRgAct: "nobuy", btSize: "pct", btSl: "0", btTp: "0", btSide: "long", btBorrow: "1", btTrend: "0", btFee: "0", btSlip: "0.1" });
+  $("btErr").textContent = ""; $("exOut").innerHTML = "";
+  saveForm(); toast("設定をクリアしました");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+// 最近の検証（この端末に8件まで）
+function addHist(lb) {
+  const form = getForm(), key = JSON.stringify(form), M = lb.res.metrics;
+  const list = store.get("st-hist", []).filter(h => JSON.stringify(h.form) !== key);
+  list.unshift({ t: Date.now(), form, label: `${lb.cfg.symbols.join("・")}｜${paramText(lb.cfg)}`, total: M.totalPct, dd: M.maxDDPct, years: period });
+  store.set("st-hist", list.slice(0, 8));
+  renderHist(); renderRecent();
+}
+function renderHist() {
+  const list = store.get("st-hist", []);
+  $("histBtn").textContent = `最近の検証${list.length ? `（${list.length}）` : ""}`;
+  $("histList").innerHTML = list.length ? list.map((h, i) => `<div class="hrow" data-i="${i}"><span>${esc(h.label)}<small>${h.form.market === "US" ? "米国株" : "日本株"}・${h.years ? h.years + "年" : "全期間"}・${new Date(h.t).toLocaleDateString("ja-JP")}</small></span><span class="num ${cls(h.total)}" style="white-space:nowrap">${pct(h.total)}<small>-${Number(h.dd).toFixed(0)}%</small></span></div>`).join("") : `<div class="empty">まだありません。検証すると、ここに設定と結果が残ります</div>`;
+}
+// 最近使った銘柄（いまの市場のもの）。タップで銘柄欄に足す
+function renderRecent() {
+  const seen = [];
+  for (const h of store.get("st-hist", [])) if (h.form.market === market) for (const s of parseSyms(h.form.btSymbols)) if (!seen.includes(s)) seen.push(s);
+  $("btRecent").innerHTML = seen.slice(0, 8).map(s => `<button data-s="${esc(s)}">${esc(symLabel(market, s))}</button>`).join("");
+}
 
 /* ---------- 組み合わせを自動で探す ---------- */
 let exRows = [];
@@ -869,16 +921,32 @@ $("rgAdd").onchange = e => {
   if (P && rgRows.length < RG_MAX) rgRows.push({ preset: k, role: P.role, val: P.def(market), market });
   renderRg();
 };
-$("rgList").addEventListener("click", e => { const b = e.target.closest("[data-del]"); if (b) { rgRows.splice(Number(b.dataset.del), 1); renderRg(); } });
+$("rgList").addEventListener("click", e => { const b = e.target.closest("[data-del]"); if (b) { rgRows.splice(Number(b.dataset.del), 1); renderRg(); saveForm(); } });
 $("rgList").addEventListener("input", e => { const t = e.target; if (t.dataset.val != null) rgRows[Number(t.dataset.val)].val = Number(String(t.value).replace(/[,\s]/g, "")) || 0; });
 $("rgList").addEventListener("change", e => {
   const t = e.target;
   if (t.dataset.role != null) { rgRows[Number(t.dataset.role)].role = t.value; renderRg(); }
   else if (t.dataset.val != null) rgRows[Number(t.dataset.val)].val = Number(String(t.value).replace(/[,\s]/g, "")) || 0;
 });
-segInit("btMarket", setMarket);
-segInit("btPeriod", v => period = Number(v));
+segInit("btMarket", m => { if (m !== market) $("btSymbols").value = ""; setMarket(m); renderRecent(); saveForm(); });
+segInit("btPeriod", v => { period = Number(v); saveForm(); });
 setMarket("JP");
 renderParams();
+// 前回の設定を戻す
+{ const f = store.get("st-form", null); if (f) { try { setForm(f); } catch (_) { /* 古い形式は無視 */ } } }
+renderHist(); renderRecent();
+$("vBT").addEventListener("change", e => { if (e.target.closest("input,select")) saveForm(); });
+$("btClear").onclick = clearForm;
+$("histBtn").onclick = () => $("histBox").classList.toggle("hidden");
+$("histList").addEventListener("click", e => {
+  const r = e.target.closest(".hrow"); if (!r) return;
+  const h = store.get("st-hist", [])[Number(r.dataset.i)]; if (!h) return;
+  setForm(h.form); saveForm(); $("histBox").classList.add("hidden"); toast("設定を呼び出しました");
+});
+$("btRecent").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const cur = parseSyms($("btSymbols").value);
+  if (!cur.includes(b.dataset.s)) { $("btSymbols").value = [...cur, b.dataset.s].join(", "); saveForm(); }
+});
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
