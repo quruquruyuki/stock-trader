@@ -45,6 +45,35 @@ export function metrics(equity, trades, initial) {
   };
 }
 
+/* ---------- 期間を区切る ---------- */
+// 日付の並びを、年ごと（4年以上）・半年ごと（1.5年以上）・四半期ごとに区切る。短すぎる端の区間は隣とまとめる
+export function segmentize(dates) {
+  if (!dates.length) return { unit: "", segs: [] };
+  const years = (Date.parse(dates[dates.length - 1]) - Date.parse(dates[0])) / 864e5 / 365.25;
+  const unit = years >= 4 ? "year" : years >= 1.5 ? "half" : "quarter";
+  const keyOf = d => {
+    const y = d.slice(2, 4), m = Number(d.slice(5, 7));
+    return unit === "year" ? `'${y}` : unit === "half" ? `'${y}${m <= 6 ? "前" : "後"}` : `'${y}Q${Math.ceil(m / 3)}`;
+  };
+  const segs = [];
+  dates.forEach((d, i) => {
+    const k = keyOf(d), last = segs[segs.length - 1];
+    if (last && last.label === k) last.i1 = i; else segs.push({ label: k, i0: i, i1: i });
+  });
+  const len = s => s.i1 - s.i0 + 1, minLen = { year: 100, half: 50, quarter: 25 }[unit];
+  if (segs.length > 2 && len(segs[0]) < minLen) { segs[1].i0 = segs[0].i0; segs[1].label = segs[0].label + "-" + segs[1].label.slice(1); segs.shift(); }
+  if (segs.length > 2 && len(segs[segs.length - 1]) < minLen) { const z = segs.pop(); segs[segs.length - 1].i1 = z.i1; segs[segs.length - 1].label += "〜"; }
+  for (const g of segs) { g.from = dates[g.i0]; g.to = dates[g.i1]; }
+  return { unit, segs };
+}
+// 区間ごとの損益（%）。区間の始まりは、ひとつ前の区間の最後の資産（最初は元本）
+export function segReturns(equity, segs, initial) {
+  return segs.map(g => {
+    const base = g.i0 > 0 ? equity[g.i0 - 1]?.equity : initial, end = equity[g.i1]?.equity;
+    return base > 0 && end != null ? (end / base - 1) * 100 : null;
+  });
+}
+
 /* ---------- パラメータの総当たり ---------- */
 // 戦略ごとの候補。前半（学習期間）で成績を出し、後半（確認期間）でも通用するかを見る
 export const GRIDS = {

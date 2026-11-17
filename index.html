@@ -115,6 +115,17 @@ a.ext b{display:block;font-size:15px;color:var(--acc)} a.ext span{font-size:12px
 .mk .big{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1}
 .lv{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px}
 .lv.calm{background:#e3f1ea;color:var(--up)} .lv.warn{background:#fbf1dc;color:var(--warn)} .lv.hot{background:#fbe9e6;color:var(--dn)}
+.segrow{padding:10px 0;border-top:1px solid var(--line)}
+.segrow.head{border-top:0;padding-bottom:4px}
+.segrow.r{cursor:pointer} .segrow.r:active{background:var(--soft)}
+.segrow .t{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;font-size:13px;line-height:1.4;margin-bottom:6px}
+.segrow .t small{display:block;color:var(--mu);font-size:11px}
+.segrow .t .num{text-align:right;white-space:nowrap;font-size:12px}
+.segrow .t .num b{display:block;font-size:12px}
+.segrow.head .t{margin:0}
+.segs{display:grid;gap:2px}
+.segs span{font-family:var(--num,ui-monospace,monospace);font-size:10.5px;text-align:center;padding:5px 0;border-radius:4px;background:var(--soft);white-space:nowrap;overflow:hidden}
+.segs.lab span{background:none;color:var(--mu);font-size:10px;padding:0}
 .swsum{font-size:13px;line-height:1.6;background:var(--soft);border-radius:10px;padding:10px 12px;margin:12px 0}
 .tscroll{overflow-x:auto;max-height:420px;overflow-y:auto}
 .empty{color:var(--mu);font-size:13px;text-align:center;padding:24px 8px;line-height:1.7}

@@ -1,6 +1,6 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg } from "./engine.js";
-import { GRIDS, backtest, sweep } from "./research.js";
+import { GRIDS, backtest, sweep, segmentize, segReturns } from "./research.js";
 
 const CFG = window.ST_CONFIG;
 const sb = createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -417,17 +417,16 @@ $("exRun").onclick = async () => {
     }
     const filters = [null, ...cands.filter(c => !c.f.key || data[c.f.key])];
     const skipped = cands.filter(c => c.f.key && !data[c.f.key]).map(c => c.P.label);
-    // 期間を前半7割・後半3割に分ける
+    // 全期間を1回ずつ検証し、年ごと（短い期間は半年・四半期ごと）の区間に分けて買い持ちと比べる
     const cfg0 = { ...base, symbols: ok, regime: { mode: "off" } };
     const all = backtest({ ...cfg0, strategy: "hold", params: {} }, data, { from: start });
     const dates = all.equity.map(e => e.d);
-    if (dates.length < 200) throw new Error("期間が短すぎます。2年以上で試してください");
-    const split = dates[Math.floor(dates.length * 0.7)], first = start || dates[0];
-    const nx = new Date(split + "T00:00:00Z"); nx.setUTCDate(nx.getUTCDate() + 1);
-    const next = nx.toISOString().slice(0, 10);
+    if (dates.length < 120) throw new Error("期間が短すぎます。1年以上で試してください");
+    const { unit, segs } = segmentize(dates);
+    const benchSeg = segReturns(all.equity, segs, base.initialCash), benchM = all.metrics;
+    const K = segs.length, need = Math.max(2, Math.ceil(K * 0.6));
     const strategies = Object.keys(STRATEGIES).filter(k => k !== "hold" && (!STRATEGIES[k].needsVol || data["IX:" + (m === "JP" ? "NKVI" : "VIX")]));
     const rows = [];
-    let bench = null;
     for (const [si, st] of strategies.entries()) {
       busy($("exRun"), true, `計算中… ${si + 1}/${strategies.length}`);
       await tick();
@@ -435,27 +434,33 @@ $("exRun").onclick = async () => {
       for (const c of filters) {
         const cfg = { ...cfg0, strategy: st, params, fearSym: STRATEGIES[st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false,
           regime: c ? { mode: "auto", action: base.regime.action, filters: [c.f] } : { mode: "off" } };
-        const a = backtest(cfg, data, { from: first, to: split }), b = backtest(cfg, data, { from: next });
-        if (!a.metrics || !b.metrics) continue;
-        bench ||= { a: a.bench.metrics, b: b.bench.metrics };
-        // 前半・後半それぞれで、買い持ちより効率（シャープ）がどれだけ良いか。弱いほうで並べる
-        const ea = a.metrics.sharpe - a.bench.metrics.sharpe, eb = b.metrics.sharpe - b.bench.metrics.sharpe;
-        const enough = a.metrics.roundTrips >= 3 && b.metrics.trades >= 1;
-        rows.push({ st, c, a: a.metrics, b: b.metrics, score: Math.min(ea, eb), pass: enough && ea > 0 && eb > 0, enough });
+        const r = backtest(cfg, data, { from: start });
+        if (!r.metrics || r.equity.length !== dates.length) continue;
+        const seg = segReturns(r.equity, segs, base.initialCash);
+        const ex = seg.map((v, i) => v == null || benchSeg[i] == null ? null : v - benchSeg[i]);
+        const wins = ex.filter(v => v != null && v > 0.5).length; // 0.5ポイント以内の差は引き分け
+        const sorted = ex.filter(v => v != null).sort((x, y) => x - y), median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+        const enough = r.metrics.roundTrips >= 3;
+        const pass = enough && wins >= need && r.metrics.sharpe > benchM.sharpe;
+        rows.push({ st, c, M: r.metrics, seg, ex, wins, median, pass, enough });
       }
     }
-    exRows = rows.filter(r => r.enough).sort((x, y) => (y.pass - x.pass) || (y.score - x.score)).slice(0, 12);
+    exRows = rows.filter(r => r.enough).sort((x, y) => (y.pass - x.pass) || (y.wins - x.wins) || (y.median - x.median)).slice(0, 15);
     const nPass = rows.filter(r => r.pass).length;
-    const cell = M => `<span class="${cls(M.totalPct)}">${pct(M.totalPct)}</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
+    const unitName = { year: "1年", half: "半年", quarter: "3か月" }[unit];
+    const strip = (vals, exs) => `<div class="segs" style="grid-template-columns:repeat(${K},1fr)">${vals.map((v, i) => {
+      const e = exs ? exs[i] : null, col = e == null || Math.abs(e) <= 0.5 ? "" : e > 0 ? `background:rgba(52,140,90,${Math.min(0.55, 0.12 + Math.abs(e) / 40)})` : `background:rgba(200,70,60,${Math.min(0.5, 0.1 + Math.abs(e) / 40)})`;
+      return `<span style="${col}">${v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0)}</span>`;
+    }).join("")}</div>`;
+    const ruleText = c => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ売買" : "は控える");
     out.innerHTML = !exRows.length ? `<div class="empty">売買が成立した組み合わせがありませんでした。売買単位や資金を見直してください</div>` : `
-      <div class="swsum">${rows.length}通りを検証。前半 <span class="num">${fmtD(dates[0])}〜${fmtD(split)}</span>／後半 <span class="num">〜${fmtD(dates[dates.length - 1])}</span><br>
-      前半も後半も買い持ちより効率が良かったのは <b>${nPass}通り</b>。${nPass === 0 ? "この銘柄・期間では、買って持ち続けるのが一番でした。下の表は惜しかった順です。" : nPass > rows.length * 0.15 ? "多くの組み合わせが通っています。この期間は下落局面を含んでいて、売買を控える戦略が有利だった可能性があります。" : "数は多くありません。偶然の当たりも混ざるので、★の中から理由に納得できるものを選んでください。"}</div>
-      <div class="tscroll"><table class="t sw"><tr><th>戦略／相場フィルター</th><th>前半</th><th>後半</th></tr>
-      <tr><td class="p mu">買って持ち続けた場合</td><td>${cell(bench.a)}</td><td>${cell(bench.b)}</td></tr>
-      ${exRows.map((r, i) => `<tr class="r" data-i="${i}"><td class="p">${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<br><span class="mu" style="font-size:11px">${r.c ? esc(r.c.P.label) + (r.c.f.role === "only" ? "の時だけ" : "は控える") : "フィルターなし"}</span></td><td>${cell(r.a)}</td><td>${cell(r.b)}</td></tr>`).join("")}
-      </table></div>
-      <p class="hint">各マスは 損益 と 最大下落。★は前半・後半とも、買い持ちより「値動きあたりの効率（シャープ）」が良かったもの。行をタップすると、その組み合わせをフォームに入れて検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
-    out.querySelectorAll("tr.r").forEach(tr => tr.onclick = () => {
+      <div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(dates[dates.length - 1])}</span>）。<br>
+      ${K}区間のうち${need}区間以上で買い持ちに勝ち、全体の効率（シャープ）も上回ったのは <b>${nPass}通り</b>。${nPass === 0 ? "この銘柄・期間では、買って持ち続けるのが一番でした。下は惜しかった順です。" : "勝った区間が多く、負けた区間の負け方が小さいものほど、偶然ではない可能性が高くなります。"}</div>
+      <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
+      <div class="segrow base"><div class="t"><span>買って持ち続けた場合</span><span class="num ${cls(benchM.totalPct)}">${pct(benchM.totalPct)}<small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
+      ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<small>${esc(ruleText(r.c))}</small></span><span class="num"><b>${r.wins}/${K}勝</b><span class="${cls(r.M.totalPct)}">${pct(r.M.totalPct)}</span><small>-${r.M.maxDDPct.toFixed(0)}%</small></span></div>${strip(r.seg, r.ex)}</div>`).join("")}
+      <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は勝った区間の数、全期間の損益と最大下落。★は${need}区間以上で勝ち、全体の効率も上回ったもの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
+    out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
       const r = exRows[Number(tr.dataset.i)];
       $("btStrategy").value = r.st; renderParams();
       rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
