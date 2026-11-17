@@ -60,6 +60,24 @@ export const GRIDS = {
   tom: { from: [22, 24, 26, 28], to: [2, 3, 5] },
   fear: { buy: [22, 25, 30, 35, 40], sell: [15, 18, 20, 25] },
   fearpeak: { th: [25, 30, 35, 40], drop: [10, 20, 30], sell: [15, 18, 22] },
+  ema: { short: [5, 9, 12, 20, 30], long: [21, 26, 50, 100, 200] },
+  ichimoku: { tenkan: [7, 9, 12], kijun: [22, 26, 30], senkou: [44, 52, 60] },
+  psar: { step: [0.01, 0.02, 0.03], max: [0.1, 0.2, 0.3] },
+  supertrend: { period: [7, 10, 14, 20], mult: [2, 2.5, 3, 4] },
+  adx: { period: [10, 14, 20], th: [15, 18, 22, 25], box: [10, 20, 40] },
+  linreg: { period: [20, 50, 100, 200], k: [1, 1.5, 2, 3] },
+  rating: { buy: [0.1, 0.2, 0.3, 0.5], sell: [-0.3, -0.1, 0, 0.1] },
+  keltner: { period: [10, 20, 30, 50], mult: [1, 1.5, 2, 2.5] },
+  volexp: { period: [10, 14, 20], k: [1.2, 1.5, 2], exit: [5, 10, 20] },
+  insidebar: { hold: [3, 5, 10, 20, 40] },
+  pivot: { left: [2, 4, 8], right: [1, 2, 4] },
+  volume: { period: [10, 20, 50], k: [1.5, 2, 3], exit: [5, 10, 20] },
+  vwap: { period: [10, 20, 50, 100, 200] },
+  vprofile: { period: [30, 60, 120, 250] },
+  uo: { buy: [25, 30, 35, 40], sell: [60, 65, 70, 75] },
+  fibo: { look: [40, 60, 120], swing: [8, 15], level: [0, 1, 2], target: [0, 1, 2] },
+  candle: { pat: [0, 1, 2, 4, 5, 6, 7, 8], hold: [3, 5, 10, 20] },
+  chartpat: { pat: [1, 2, 3, 4], width: [3, 5, 8], tol: [2, 3, 5] },
   hold: {},
 };
 function combos(grid) {
@@ -75,6 +93,10 @@ function validParams(strategy, p) {
   if (strategy === "fear") return p.sell < p.buy;
   if (strategy === "fearpeak") return p.sell < p.th * 0.8;
   if (strategy === "tma") return p.short < p.mid && p.mid < p.long;
+  if (strategy === "ema") return p.short < p.long;
+  if (strategy === "ichimoku") return p.tenkan < p.kijun && p.kijun < p.senkou;
+  if (strategy === "uo") return p.buy < p.sell;
+  if (strategy === "rating") return p.sell < p.buy;
   return true;
 }
 // split（YYYY-MM-DD）までを前半、それより後を後半として、各組み合わせを別々に検証する

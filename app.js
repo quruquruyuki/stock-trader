@@ -1,5 +1,5 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { STRATEGIES, normalizeCfg } from "./engine.js";
+import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg } from "./engine.js";
 import { GRIDS, backtest, sweep } from "./research.js";
 
 const CFG = window.ST_CONFIG;
@@ -136,12 +136,30 @@ const STRAT_HELP = {
   boll: { how: "移動平均の上下に、値動きの大きさ（標準偏差σ）で幅をつけた帯がボリンジャーバンドです。終値が下の帯を割ったら「下げすぎ」とみて買い、平均線まで戻ったら売ります。", good: "もみ合い相場、急落のあとの戻り。", weak: "悪材料で下げが続くとき。帯に沿って下がり続ける「バンドウォーク」で損が膨らみます。", tip: "倍率を2→2.5や3にすると、めったにない大きな下げだけを拾います。損切りを必ず入れたい戦略です。" },
   macd: { how: "短期と長期の平均（最近の値を重く見るEMA）の差がMACDです。MACDが、その平均である「シグナル線」を上に抜けたら買い、下に抜けたら売ります。勢いの変わり目を見ます。", good: "流れが出始めた初動。移動平均クロスより早く反応します。", weak: "もみ合い。小さな上下で何度も売買してしまいます。", tip: "12・26・9が世界中で使われている標準です。「トレンド条件（200日線より上）」と組み合わせると、下落相場での買いを減らせます。" },
   roc: { how: "N日前の株価と比べて、基準より上がっていれば持ち、下回ったら売ります。「上がっているものは、しばらく上がり続けやすい」という性質（モメンタム）を使います。", good: "強い銘柄がさらに強くなる相場、指数ETFの長期の上昇。", weak: "流れが急に反転する場面。高値で持ったまま下げを受けます。", tip: "比較を60日より120日・200日と長くすると、売買は減って大きな流れだけに乗ります。複数銘柄に入れると、強い銘柄だけを持つ形になります。" },
-  stoch: { how: "直近N日の高値と安値の幅の中で、今の終値がどの位置にあるか（%K）を0〜100で見ます。下のほうで買い、上のほうで売ります。RSIより敏感に動きます。", good: "短い周期で上下するもみ合い相場。", weak: "一方向に強く動く相場。下げ続ける途中で何度も買ってしまいます。", tip: "売買回数が多くなりやすいので、手数料と滑りを入れて確かめてください。期間を長くすると落ち着きます。" },
+  stoch: { how: "直近N日の高値と安値の幅の中で、今の終値がどの位置にあるか（%K）を0〜100で見ます。下のほうで買い、上のほうで売ります。RSIより敏感に動きます。平滑を3にすると、3日平均でならした「スロー・ストキャスティクス」になります。", good: "短い周期で上下するもみ合い相場。", weak: "一方向に強く動く相場。下げ続ける途中で何度も買ってしまいます。", tip: "売買回数が多くなりやすいので、手数料と滑りを入れて確かめてください。期間を長くすると落ち着きます。" },
   tma: { how: "短期・中期・長期の3本の移動平均が、上から短期＞中期＞長期の順に並んだとき（パーフェクトオーダー）だけ持ちます。並びが崩れたら売ります。", good: "きれいな上昇が長く続く相場。だましが少なく、持っている間は安心感があります。", weak: "上昇の初動と終わり。入るのも出るのも遅く、短い上昇は取り逃します。", tip: "売買は少なめ。5・25・75が定番です。回数が少なすぎるときは、短い組み合わせ（5・10・25など）に。" },
   dip: { how: "終値がN日続けて下がったら「下げすぎの反発」を狙って買い、短い移動平均を上回ったら売ります。数日で終わる短い売買です。", good: "長期では上向きの銘柄や指数ETFの、一時的な下げ。", weak: "下落相場の入り口。続落がそのまま大きな下げにつながります。", tip: "「トレンド条件（200日線より上）」や相場フィルターと組み合わせるのが基本です。1回の利益は小さいので、手数料と滑りの影響を確かめてください。" },
   tom: { how: "月末から月初の数日だけ持ちます。給料日後の積立や投信の買いが月の変わり目に入りやすい、という経験則（月替わり効果）を使います。", good: "相場全体が落ち着いているとき。指数ETF向きです。", weak: "個別の悪材料や急落。日付だけで買うので、相場の状態は見ていません。", tip: "持つ日数が短いぶん、資金が市場にさらされる時間も短い戦略です。相場フィルターと組み合わせると、荒れた月を避けられます。" },
   fear: { how: "恐怖指数（VIX・日経平均VI）が高い＝みんなが怖がって売っているとき、に買い、落ち着いたら売ります。「総悲観は買い」の考え方です。", good: "急落のあと。過去の米国株では、恐怖指数が高い日のあとの成績は平均より良い傾向でした。", weak: "金融危機のように、恐怖が長く続いて下げ続ける局面。早く入りすぎます。", tip: "機会は年に数回です。指数ETFで使うのが素直。「仕掛け」を上げるほど回数は減り、深い下げだけを拾います。" },
   fearpeak: { how: "恐怖指数が高くなったあと、直近20日の高値から一定の割合だけ下がったのを確かめてから買います。「怖さのピークが過ぎた」のを待つ、慎重な入り方です。", good: "急落からの回復。下げの途中で買ってしまう失敗を減らせます。", weak: "V字で一気に戻る相場。待っている間に、戻りの最初を取り逃します。", tip: "「恐怖指数の逆張り」と結果を比べてみてください。下落を小さくしたいならこちら、戻りを全部取りたいなら逆張り、という使い分けです。" },
+  ema: { how: "直近の値ほど重く見る移動平均（EMA）を2本使い、短期が長期を上に抜けたら買い、下に抜けたら売ります。", good: "流れのはっきりした相場。普通の移動平均クロスより早く乗れます。", weak: "もみ合い。反応が早いぶん、だましも増えます。", tip: "12と26、20と50、50と200が定番。移動平均クロスと同じ日数で比べると、早さと安定のちがいが分かります。" },
+  ichimoku: { how: "一目均衡表の「三役好転」（転換線＞基準線、終値が雲の上、遅行線が26日前の終値より上）がそろったら買い、終値が雲の中に入ったら売ります。雲は過去の高値・安値から作る、支えと抵抗の帯です。", good: "日本株の中長期の上昇相場。条件が多いぶん、強い上昇だけを選べます。", weak: "雲が薄いところでの上下や、急な反転。入るのも出るのも遅めです。", tip: "9・26・52が標準です。日足で使われることが多く、相場フィルターで「指数が三役好転のときだけ」にする使い方も人気です。" },
+  psar: { how: "株価の下（上昇中）か上（下降中）に点を打ち、上昇が続くほど点が株価に近づきます。株価が点を割ったら売り。いわば自動で上がっていく損切り線です。", good: "一方向に勢いよく動く相場。利益を伸ばしつつ、反転したらすぐ降ります。", weak: "もみ合い。点がすぐ割られて、売買が増えます。", tip: "加速の幅を小さくすると、点の追いかけがゆっくりになり、長く持てます。ほかの戦略の「出口」として考えるのも有効です。" },
+  supertrend: { how: "高値と安値の中心から、ATR（ふだんの値幅）の何倍か上と下に線を引きます。終値が上の線を超えたら上昇トレンドとして買い、下の線を割ったら売ります。", good: "数か月続くトレンド。線が値動きの荒さに合わせて広がるので、ノイズで振り落とされにくいです。", weak: "方向感のないもみ合い。", tip: "倍率を大きくすると、持つ期間が長く、売買が少なくなります。10日・3倍が標準です。" },
+  adx: { how: "ADXは「トレンドの強さ」を0〜100で表す指標です。ADXが低い＝もみ合いで力をためている状態から、直近の高値を上抜けた瞬間に買います。直近の安値を割ったら売り。", good: "長いもみ合いから大きく動き出す銘柄。", weak: "もみ合いのまま上下に抜けたり戻ったりする相場。", tip: "「もみ合い」の値を上げると条件がゆるくなり、回数が増えます。Rob Booker の「ADXブレイクアウト」をもとにしています。" },
+  linreg: { how: "直近N日の終値に一番よく合う直線（回帰線）を引きます。線が右肩上がりで、終値が線より上なら買い。線のまわりのばらつき（σ）の下の帯を割るか、線が下向きになったら売ります。", good: "なだらかに上がり続ける相場。", weak: "急な上げ下げ。直線では追いつけません。", tip: "期間を長くすると、大きな流れだけを見ます。下の帯の倍率を大きくすると、押し目で振り落とされにくくなります。" },
+  rating: { how: "TradingViewの「テクニカル評価」と同じ考え方で、移動平均12本（終値が上なら買い）と、RSI・ストキャス・MACD・モメンタム・ADX・アルティメット・オシレーターの判定を数え、−1（強い売り）〜+1（強い買い）の点数にします。", good: "いろいろな指標の意見がそろう、はっきりした上昇相場。", weak: "急な反転。多数決なので、変わり目には遅れます。", tip: "「買い」を0.5にすると「強い買い」のときだけ入ります。1つの指標に頼らないので、まず試す土台として便利です。" },
+  keltner: { how: "EMAの上下に、ATR（ふだんの値幅）の何倍かの帯を引きます（ケルトナーチャネル）。終値が上の帯を超えるほど強く上がったら買い、EMAまで戻ったら売ります。", good: "勢いのある上昇の始まり。", weak: "一度上に抜けてすぐ戻る相場。", tip: "ボリンジャーバンドと似ていますが、こちらは「抜けたら乗る」順張りです。倍率を下げると早く入れます。" },
+  volexp: { how: "その日の値幅（高値−安値）が、ふだんの値幅（ATR）の何倍にも広がり、しかも高値近くで引けた陽線を「本気の買い」とみて買います。終値が短い移動平均を割ったら売り。", good: "材料が出て動き出した銘柄、急落からの力強い反発。", weak: "値幅が広がっても続かない相場。", tip: "倍率を上げると、めったにない大きな動きだけを拾います。" },
+  insidebar: { how: "前日の高値・安値が前々日の範囲にすっぽり収まった足（インサイドバー＝はらみ足）は、力をためているサインとされます。そのあと前々日の高値を上抜けたら買い。前々日の安値を割るか、決めた日数たったら売ります。", good: "上昇トレンドの途中の小休止。", weak: "上抜けてすぐ戻る相場。", tip: "損切りの位置がはっきりしているので、「損切り幅から逆算」の買い方と相性が良いです。" },
+  pivot: { how: "左右の何本かの足より高い足を「山」、低い足を「谷」とします。直近の山を上抜けたら買い、直近の谷を割ったら売ります。右側の足が確定するまで山・谷は分からないので、その日数だけ遅れて判定します。", good: "高値・安値を切り上げていく上昇相場（ダウ理論の上昇）。", weak: "山と谷が入りまじるもみ合い。", tip: "左右の本数を増やすと、大きな山・谷だけを見るようになります。" },
+  volume: { how: "出来高がふだんの何倍にも膨らんだ陽線を「大口が買った」とみて買います。終値が短い移動平均を割ったら売り。", good: "材料やニュースで注目された銘柄の初動。", weak: "出来高を伴って天井をつける場面（大量の売り抜け）。", tip: "日本株は約12週間遅れのデータなので、模擬取引ではニュースより遅れて反応します。米国株での検証が向いています。" },
+  vwap: { how: "直近N日の「出来高で重みをつけた平均価格（VWAP）」は、その期間に買った人の平均的な値段です。終値がそれより上なら、買った人の多くが利益で余裕がある、として持ちます。", good: "出来高を伴う上昇相場。", weak: "出来高が少ない銘柄。平均がぶれます。", tip: "移動平均（終値だけの平均）と結果を比べてみてください。差が大きい銘柄ほど、出来高の情報が効いています。" },
+  vprofile: { how: "直近N日について「どの価格帯でどれだけ売買されたか（価格帯別出来高）」を集計します。出来高の7割が集まる帯（バリューエリア）の上端を上抜けたら、しこりを抜けたとみて買い。一番売買が多かった価格（POC）を割ったら売ります。", good: "長くもみ合ったあとの上放れ。", weak: "出来高が少ない銘柄、上抜けてすぐ戻る相場。", tip: "期間を長くすると、より大きな「しこり」を基準にします。60日（約3か月）か250日（約1年）がおすすめです。" },
+  uo: { how: "アルティメット・オシレーターは、7日・14日・28日の3つの期間で「終値が値幅のどのあたりで引けたか」をまとめた指標です。低い（売られすぎ）ところで買い、高いところで売ります。期間を混ぜるので、RSIよりだましが少ないとされます。", good: "一定の幅で上下するもみ合い、上昇トレンドの押し目。", weak: "強い下落が続く相場。", tip: "値が30を下回ることはまれなので、初期値は35にしています。回数が少ないときは40に上げてみてください。" },
+  fibo: { how: "直近N日の上昇（安値→高値）に対して、フィボナッチの比率（38.2%・50%・61.8%）だけ下げた水準を自動で求めます。その水準まで押して、陽線で戻したら買い。目標（前の高値など）に届くか、元の安値を割るか、60日たったら売ります。", good: "上昇トレンドの途中の押し目。", weak: "下落への転換。押し目のつもりがそのまま下げ続けます。", tip: "61.8%は深い押し目、38.2%は浅い押し目です。描画ツールのフィボナッチ・リトレースメントを自動で引いている、と考えてください。" },
+  candle: { how: "ローソク足の形（包み足、ハンマー、明けの明星、赤三兵など）を自動で見つけ、出た翌日の始値で入ります。反対向きのパターンが出るか、決めた日数たったら手じまいます。反転を示す形は、その前に下げている（10日線より下）ときだけ数えます。", good: "下げたあとの反発、上げたあとの反落の「変わり目」。", weak: "形だけで中身のない動き。1本や2本の足は偶然でもよく出ます。", tip: "1つの形だけだと回数が少ないので、まず「すべて」で試し、そのあと形ごとに比べるのがおすすめです。「（空売り向け）」の形は、細かい設定で「空売り」にして使います。" },
+  chartpat: { how: "左右の足より高い「山」と低い「谷」を自動で見つけ、ダブルボトムや逆三尊などの形ができたかを調べます。形ができたあと、ネックライン（形の中の山や谷の線）を抜けたら入ります。形の高さぶん進んだら利確、形の端を逆に抜けたら損切りです。", good: "底打ちや天井打ちの場面。教科書どおりの形がはっきり出る銘柄。", weak: "形ができても抜けずに崩れる相場。判定は機械的なので、人の目で見る形とずれることがあります。", tip: "山・谷の幅を大きくすると、数か月単位の大きな形だけを見ます。高さのずれ（%）を大きくすると、ゆるい形も数えます。" },
   hold: { how: "最初に買って、そのまま持ち続けます。売買はしません。", good: "長期で上がる市場。手数料も手間もかからず、多くの戦略はこれに勝てません。", weak: "長い下落相場。下げをそのまま受けます。", tip: "ほかの戦略の「ものさし」です。結果の画面の「買って持ち続けた場合」と同じものです。" },
 };
 
@@ -176,6 +194,18 @@ const RG_PRESETS = {
   yenstrong: { group: "為替・原油", label: "円高が進んでいる", sub: () => "ドル円が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("IX:USDJPY", "below") },
   oilup: { group: "為替・原油", label: "原油が上がっている", sub: () => "原油（WTI）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("IX:WTI", "above") },
   oildown: { group: "為替・原油", label: "原油が下がっている", sub: () => "原油（WTI）が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("IX:WTI", "below") },
+  ichiup: { group: "指数のテクニカル", label: "指数が一目均衡表で強気", sub: m => `${idxName(m)}が三役好転してから、雲に入るまで`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "ichimoku", params: {}, cond: "on" }) },
+  stup: { group: "指数のテクニカル", label: "指数のスーパートレンドが上向き", sub: m => `${idxName(m)}のスーパートレンド（10日・3倍）`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "supertrend", params: {}, cond: "on" }) },
+  sarup: { group: "指数のテクニカル", label: "指数のパラボリックSARが上向き", sub: m => `${idxName(m)}の株価がSARより上`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "psar", params: {}, cond: "on" }) },
+  gcross: { group: "指数のテクニカル", label: "指数がゴールデンクロス中", sub: m => `${idxName(m)}の50日線が200日線より上`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "sma", params: { short: 50, long: 200 }, cond: "on" }) },
+  macdup: { group: "指数のテクニカル", label: "指数のMACDが上向き", sub: m => `${idxName(m)}のMACDがシグナルより上`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "macd", params: {}, cond: "on" }) },
+  ratebuy: { group: "指数のテクニカル", label: "指数のテクニカル評価が買い", sub: m => `${idxName(m)}の総合点がこの値より上`, unit: "総合点（−1〜1）", def: () => 0.1, zero: true, role: "only", make: (m, v) => ({ kind: "sig", key: idxKey(m), strat: "rating", params: { buy: v, sell: v }, cond: "on" }) },
+  notrend: { group: "指数のテクニカル", label: "トレンドが弱い（もみ合い）", sub: m => `${idxName(m)}のADX（14日）がこの値より下`, unit: "ADXがこの値未満", def: () => 20, role: "avoid", make: (m, v) => ({ kind: "osc", key: idxKey(m), osc: "adx", n: 14, op: "lt", th: v }) },
+  hot: { group: "指数のテクニカル", label: "過熱（指数のRSIが高い）", sub: m => `${idxName(m)}のRSI（14日）がこの値より上`, unit: "RSIがこの値超", def: () => 70, role: "avoid", make: (m, v) => ({ kind: "osc", key: idxKey(m), osc: "rsi", n: 14, op: "gt", th: v }) },
+  cold: { group: "指数のテクニカル", label: "売られすぎ（指数のRSIが低い）", sub: m => `${idxName(m)}のRSI（14日）がこの値より下`, unit: "RSIがこの値未満", def: () => 35, role: "only", make: (m, v) => ({ kind: "osc", key: idxKey(m), osc: "rsi", n: 14, op: "lt", th: v }) },
+  wild: { group: "指数のテクニカル", label: "値動きが荒い（ATRが大きい）", sub: m => `${idxName(m)}の1日の値幅（ATR14日）が株価のこの%より大きい`, unit: "ATRが株価の%超", def: () => 2, role: "avoid", make: (m, v) => ({ kind: "osc", key: idxKey(m), osc: "atrp", n: 14, op: "gt", th: v }) },
+  bearpat: { group: "指数のテクニカル", label: "指数に天井の形（ダブルトップ・三尊）", sub: m => `${idxName(m)}で弱気のチャートパターンが完成し、ネックラインを割ったあと`, def: () => 1, role: "avoid", make: m => ({ kind: "sig", key: idxKey(m), strat: "chartpat", params: { pat: 5 }, cond: "on" }) },
+  bullpat: { group: "指数のテクニカル", label: "指数に底の形（ダブルボトム・逆三尊）", sub: m => `${idxName(m)}で強気のチャートパターンが完成し、ネックラインを抜けたあと`, def: () => 1, role: "only", make: m => ({ kind: "sig", key: idxKey(m), strat: "chartpat", params: { pat: 0 }, cond: "on" }) },
   sellmay: { group: "季節", label: "5〜10月（セル・イン・メイ）", sub: () => "株が弱いと言われる時期", def: () => 1, role: "avoid", make: () => ({ kind: "season", m1: 5, m2: 10 }) },
   yearend: { group: "季節", label: "11〜4月（株が強いと言われる時期）", sub: () => "年末から春にかけて", def: () => 1, role: "only", make: () => ({ kind: "season", m1: 11, m2: 4 }) },
   goldup: { group: "金・債券", label: "金が上がっている", sub: () => "金ETF（GLD）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("US:GLD", "above") },
@@ -239,7 +269,9 @@ function renderParams() {
   $("btDesc").textContent = st.desc;
   const H = STRAT_HELP[$("btStrategy").value];
   $("btHelp").innerHTML = H ? `<dl><dt>しくみ</dt><dd>${H.how}</dd><dt>向いている相場</dt><dd>${H.good}</dd><dt>苦手な相場</dt><dd>${H.weak}</dd><dt>使い方のコツ</dt><dd>${H.tip}</dd></dl>` : "";
-  $("btParams").innerHTML = st.params.map(p => `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="${p.step ? "decimal" : "numeric"}" value="${p.def}"></div>`).join("");
+  $("btParams").innerHTML = st.params.map(p => p.options
+    ? `<div class="wide"><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><select id="bp_${p.key}" class="in">${p.options.map((o, i) => `<option value="${i}" ${i === p.def ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>`
+    : `<div><label class="lab" for="bp_${p.key}">${esc(p.label)}</label><input id="bp_${p.key}" class="in num" inputmode="${p.step ? "decimal" : "numeric"}" value="${p.def}"></div>`).join("");
   $("swCard") && $("swCard").classList.toggle("hidden", !Object.keys(GRIDS[$("btStrategy").value] || {}).length);
   $("btParams").classList.toggle("hidden", !st.params.length);
   $("btFearBox").classList.toggle("hidden", !st.needsVol);
@@ -480,7 +512,7 @@ function tradeTable(trades, m) {
 }
 
 const paramText = cfg => {
-  const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
+  const ps = (STRATEGIES[cfg.strategy]?.params || []).map(p => p.options ? p.options[cfg.params[p.key]] : `${p.label.replace(/（.*）/, "")} ${cfg.params[p.key]}`).join("・");
   return `${cfg.side === "short" ? "【空売り】" : ""}${STRATEGIES[cfg.strategy]?.label || cfg.strategy}${cfg.fearSym ? "・" + VOL_NAME[cfg.fearSym] : ""}${ps ? "（" + ps + "）" : ""}${cfg.trendMa ? `＋${cfg.trendMa}日線より上のときだけ` : ""}${cfg.regime && cfg.regime.mode !== "off" ? `＋相場フィルター` : ""}`;
 };
 const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
@@ -489,6 +521,8 @@ const KEY_NAME = { "JP:1306": "TOPIX（1306）", "US:SPY": "S&P500（SPY）", "U
 const keyName = k => KEY_NAME[k] || String(k).split(":").pop();
 const filterText = f => {
   const what = f.kind === "season" ? `${f.m1}〜${f.m2}月`
+    : f.kind === "sig" ? `${keyName(f.key)}の${STRATEGIES[f.strat]?.label || f.strat}${f.strat === "rating" ? `（${f.params.buy}超）` : f.strat === "sma" ? `（${f.params.short}日>${f.params.long}日）` : ""}が${f.cond === "off" ? "弱気" : "強気"}`
+    : f.kind === "osc" ? `${keyName(f.key)}の${{ rsi: "RSI", adx: "ADX", atrp: "ATR（株価比%）" }[f.osc]}が${f.th}${f.op === "gt" ? "超" : "未満"}`
     : f.kind === "dd" ? `${keyName(f.key)}が高値から${f.th}%${f.op === "gt" ? "以上下落" : "以内"}`
     : f.kind === "trend" ? `${keyName(f.key)}が${f.ma}日線より${f.cond === "above" ? "上" : "下"}`
     : f.kind === "level" ? `${keyName(f.key)}が${f.th}${f.op === "gt" ? "超" : "未満"}`
@@ -504,7 +538,7 @@ const regimeText = cfg => {
   const fs = r.filters || [];
   return fs.length ? `${fs.map(filterText).join("、")}／${act}` : "条件なし（いつも強気）";
 };
-const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
+const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => x.options ? x.options[p[x.key]] : `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
 
 /* ---------- 総当たり ---------- */
 $("swRun").onclick = async () => {
@@ -913,7 +947,7 @@ sb.auth.onAuthStateChange((_ev, session) => {
 });
 
 /* ---------- 初期化 ---------- */
-$("btStrategy").innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
+$("btStrategy").innerHTML = Object.entries(STRATEGY_GROUPS).map(([g, gl]) => `<optgroup label="${esc(gl)}">${Object.entries(STRATEGIES).filter(([, v]) => v.group === g).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("")}</optgroup>`).join("");
 $("btStrategy").onchange = renderParams;
 $("btSize").onchange = () => renderSize(true);
 $("rgAdd").onchange = e => {

@@ -3,6 +3,7 @@
 
 export const STRATEGIES = {
   sma: {
+    group: "trend",
     label: "移動平均クロス",
     desc: "短期の移動平均が長期を上回ったら買い、下回ったら売り。",
     params: [
@@ -11,6 +12,7 @@ export const STRATEGIES = {
     ],
   },
   rsi: {
+    group: "rev",
     label: "RSI逆張り",
     desc: "RSIが「買い」の値を下回ったら買い、「売り」の値を上回ったら売り。",
     params: [
@@ -20,6 +22,7 @@ export const STRATEGIES = {
     ],
   },
   breakout: {
+    group: "break",
     label: "高値ブレイク",
     desc: "終値が過去N日の高値を超えたら買い、過去M日の安値を割ったら売り。",
     params: [
@@ -28,6 +31,7 @@ export const STRATEGIES = {
     ],
   },
   boll: {
+    group: "rev",
     label: "ボリンジャー逆張り",
     desc: "終値がボリンジャーバンドの下限（平均−σ×倍率）を割ったら買い、平均線まで戻ったら売り。",
     params: [
@@ -36,6 +40,7 @@ export const STRATEGIES = {
     ],
   },
   macd: {
+    group: "trend",
     label: "MACDクロス",
     desc: "MACD（短期EMA−長期EMA）がシグナル線を上回ったら買い、下回ったら売り。",
     params: [
@@ -45,6 +50,7 @@ export const STRATEGIES = {
     ],
   },
   roc: {
+    group: "trend",
     label: "モメンタム（騰落率）",
     desc: "N日前と比べた上昇率が基準を超えていたら持つ、下回ったら売る。上がっているものに乗る順張り。",
     params: [
@@ -53,15 +59,18 @@ export const STRATEGIES = {
     ],
   },
   stoch: {
+    group: "rev",
     label: "ストキャスティクス逆張り",
     desc: "直近N日の値幅の中で終値が下のほう（%Kが「買い」未満）なら買い、上のほう（「売り」超え）で売り。",
     params: [
       { key: "period", label: "期間（日）", def: 14, min: 3, max: 100 },
       { key: "buy", label: "買い（未満）", def: 20, min: 1, max: 99 },
       { key: "sell", label: "売り（超え）", def: 80, min: 1, max: 99 },
+      { key: "smooth", label: "平滑（1=ファスト・3=スロー）", def: 1, min: 1, max: 5 },
     ],
   },
   tma: {
+    group: "trend",
     label: "3本の移動平均（パーフェクトオーダー）",
     desc: "短期＞中期＞長期の順に並んだら買い、並びが崩れたら売り。だましが少ない代わりに売買は遅め。",
     params: [
@@ -71,6 +80,7 @@ export const STRATEGIES = {
     ],
   },
   dip: {
+    group: "rev",
     label: "連続下落の押し目買い",
     desc: "終値がN日続けて下がったら買い、終値がM日移動平均を上回ったら売り。短期の反発を狙う。",
     params: [
@@ -79,6 +89,7 @@ export const STRATEGIES = {
     ],
   },
   tom: {
+    group: "etc",
     label: "月末・月初だけ持つ",
     desc: "毎月「開始日」以降から翌月「終了日」までだけ持つ。月の変わり目は上がりやすいという経験則。",
     params: [
@@ -87,6 +98,7 @@ export const STRATEGIES = {
     ],
   },
   fear: {
+    group: "etc",
     label: "恐怖指数の逆張り",
     desc: "恐怖指数（VIX・日経VI）が「仕掛け」を超えたら持ち、「手じまい」を下回ったら手放す。みんなが怖がっているときに入る。",
     needsVol: true,
@@ -96,6 +108,7 @@ export const STRATEGIES = {
     ],
   },
   fearpeak: {
+    group: "etc",
     label: "恐怖指数のピークアウト",
     desc: "恐怖指数が直近20日の高値（「高値」以上）から「下落%」だけ下がったら持ち、「手じまい」を下回ったら手放す。落ち着き始めを待ってから入る。",
     needsVol: true,
@@ -105,12 +118,183 @@ export const STRATEGIES = {
       { key: "sell", label: "手じまい（未満）", def: 18, min: 8, max: 60 },
     ],
   },
+  ema: {
+    group: "trend",
+    label: "EMAクロス（指数移動平均）",
+    desc: "最近の値を重く見る移動平均（EMA）を2本使う。短期が長期を上回ったら買い、下回ったら売り。普通の移動平均より反応が早い。",
+    params: [
+      { key: "short", label: "短期EMA（日）", def: 12, min: 2, max: 200 },
+      { key: "long", label: "長期EMA（日）", def: 26, min: 3, max: 400 },
+    ],
+  },
+  ichimoku: {
+    group: "trend",
+    label: "一目均衡表（三役好転）",
+    desc: "転換線＞基準線、終値が雲の上、遅行線が26日前の終値より上（三役好転）で買い、終値が雲の中に入ったら売り。",
+    params: [
+      { key: "tenkan", label: "転換線（日）", def: 9, min: 3, max: 60 },
+      { key: "kijun", label: "基準線（日）", def: 26, min: 5, max: 120 },
+      { key: "senkou", label: "先行スパンB（日）", def: 52, min: 10, max: 240 },
+    ],
+  },
+  psar: {
+    group: "trend",
+    label: "パラボリックSAR",
+    desc: "株価の下に点（SAR）があるあいだ持ち、株価がSARを割ったら売る。上昇が続くほどSARが近づいてくる、追いかける損切り線。",
+    params: [
+      { key: "step", label: "加速の幅", def: 0.02, min: 0.01, max: 0.1, step: 0.01 },
+      { key: "max", label: "加速の上限", def: 0.2, min: 0.1, max: 0.5, step: 0.05 },
+    ],
+  },
+  supertrend: {
+    group: "trend",
+    label: "スーパートレンド",
+    desc: "値動きの大きさ（ATR）で上下に線を引き、終値が上の線を超えたら買い、下の線を割ったら売り。トレンドが続く限り持ち続ける。",
+    params: [
+      { key: "period", label: "ATR（日）", def: 10, min: 3, max: 100 },
+      { key: "mult", label: "倍率", def: 3, min: 1, max: 6, step: 0.5 },
+    ],
+  },
+  adx: {
+    group: "break",
+    label: "ADXブレイク（もみ合い放れ）",
+    desc: "トレンドの強さ（ADX）が低い＝もみ合いのときに、直近N日の高値を上抜けたら買い、N日の安値を割ったら売り。",
+    params: [
+      { key: "period", label: "ADX（日）", def: 14, min: 5, max: 50 },
+      { key: "th", label: "もみ合い（ADX未満）", def: 18, min: 10, max: 40 },
+      { key: "box", label: "高値・安値（日）", def: 20, min: 5, max: 120 },
+    ],
+  },
+  linreg: {
+    group: "trend",
+    label: "回帰トレンド",
+    desc: "直近N日の終値に直線を引き（回帰線）、線が右肩上がりで終値が線より上なら買い。線の下の帯（σ×倍率）を割るか、線が下向きになったら売り。",
+    params: [
+      { key: "period", label: "期間（日）", def: 50, min: 10, max: 300 },
+      { key: "k", label: "下の帯（σ）", def: 2, min: 0.5, max: 4, step: 0.5 },
+    ],
+  },
+  rating: {
+    group: "trend",
+    label: "テクニカル評価（総合）",
+    desc: "移動平均12本と、RSI・ストキャス・MACD・モメンタム・ADX・アルティメットの7指標の「買い／売り」を数えて、−1〜+1の点数にする。点数が「買い」を超えたら買い、「売り」を下回ったら売り。",
+    params: [
+      { key: "buy", label: "買い（超え）", def: 0.3, min: 0, max: 1, step: 0.05 },
+      { key: "sell", label: "売り（未満）", def: 0, min: -1, max: 0.5, step: 0.05 },
+    ],
+  },
+  keltner: {
+    group: "break",
+    label: "ケルトナーチャネル・ブレイク",
+    desc: "EMAの上下にATR×倍率の帯を引き、終値が上の帯を超えたら買い、EMAを割ったら売り。勢いよく動き出したところに乗る。",
+    params: [
+      { key: "period", label: "期間（日）", def: 20, min: 5, max: 100 },
+      { key: "mult", label: "倍率（ATR）", def: 2, min: 0.5, max: 4, step: 0.5 },
+    ],
+  },
+  volexp: {
+    group: "break",
+    label: "ボラティリティ拡大",
+    desc: "その日の値幅がふだん（ATR）の何倍にも広がり、高値近くで引けた陽線で買い。終値がM日移動平均を割ったら売り。",
+    params: [
+      { key: "period", label: "ATR（日）", def: 14, min: 5, max: 60 },
+      { key: "k", label: "値幅（ATRの倍）", def: 1.5, min: 1, max: 4, step: 0.1 },
+      { key: "exit", label: "売り：移動平均（日）", def: 10, min: 3, max: 60 },
+    ],
+  },
+  insidebar: {
+    group: "break",
+    label: "インサイドバー・ブレイク",
+    desc: "前日の値幅が前々日の値幅に収まった（はらみ足＝力をためている）あと、前々日の高値を上抜けたら買い。前々日の安値を割るか、N日たったら売り。",
+    params: [
+      { key: "hold", label: "最長で持つ（日）", def: 10, min: 2, max: 60 },
+    ],
+  },
+  pivot: {
+    group: "break",
+    label: "ピボット反転（直近の山・谷）",
+    desc: "左右の足より高い「山」と低い「谷」を見つけ、直近の山を上抜けたら買い、直近の谷を割ったら売り。",
+    params: [
+      { key: "left", label: "左の足（本）", def: 4, min: 1, max: 20 },
+      { key: "right", label: "右の足（本）", def: 2, min: 1, max: 20 },
+    ],
+  },
+  volume: {
+    group: "break",
+    label: "出来高急増",
+    desc: "出来高がふだん（N日平均）の何倍にも膨らんだ陽線で買い。終値がM日移動平均を割ったら売り。大口の買いに乗る。",
+    params: [
+      { key: "period", label: "出来高の平均（日）", def: 20, min: 5, max: 100 },
+      { key: "k", label: "急増（倍）", def: 2, min: 1.2, max: 6, step: 0.1 },
+      { key: "exit", label: "売り：移動平均（日）", def: 10, min: 3, max: 60 },
+    ],
+  },
+  vwap: {
+    group: "break",
+    label: "VWAP（出来高加重平均）",
+    desc: "直近N日の「出来高で重みをつけた平均価格（VWAP）」より終値が上なら持ち、下回ったら売る。多くの人の平均買値より上か下かを見る。",
+    params: [
+      { key: "period", label: "期間（日）", def: 20, min: 5, max: 200 },
+    ],
+  },
+  vprofile: {
+    group: "break",
+    label: "価格帯別出来高ブレイク",
+    desc: "直近N日で出来高が多かった価格帯（バリューエリア＝出来高の7割が集まる範囲）を求め、その上端を上抜けたら買い、一番売買の多い価格（POC）を割ったら売り。",
+    params: [
+      { key: "period", label: "期間（日）", def: 60, min: 20, max: 250 },
+    ],
+  },
+  uo: {
+    group: "rev",
+    label: "アルティメット・オシレーター逆張り",
+    desc: "7日・14日・28日の3つの期間で買いの強さをまとめた指標。「買い」を下回ったら買い、「売り」を上回ったら売り。RSIよりだましが少ない。",
+    params: [
+      { key: "buy", label: "買い（未満）", def: 35, min: 10, max: 50 },
+      { key: "sell", label: "売り（超え）", def: 65, min: 50, max: 90 },
+    ],
+  },
+  fibo: {
+    group: "rev",
+    label: "フィボナッチ押し目買い",
+    desc: "直近N日の上昇（安値→高値）に対して、決まった割合だけ下げた水準（38.2%・50%・61.8%）まで押して戻したら買い。目標まで上がるか、元の安値を割るか、60日たったら売り。",
+    params: [
+      { key: "look", label: "見る期間（日）", def: 60, min: 20, max: 250 },
+      { key: "swing", label: "上昇幅（%以上）", def: 10, min: 3, max: 50 },
+      { key: "level", label: "押し目の深さ", def: 1, min: 0, max: 2, options: ["38.2%", "50%", "61.8%"] },
+      { key: "target", label: "利確の目標", def: 0, min: 0, max: 2, options: ["前の高値", "127.2%", "161.8%"] },
+    ],
+  },
+  candle: {
+    group: "pat",
+    label: "ローソク足パターン",
+    desc: "選んだ足の形が出た翌日に入り、反対向きのパターンが出るか、N日たったら手じまう。反転型（ハンマー、包み足など）は、その前に下げている（空売り向けは上げている）ときだけ数える。",
+    params: [
+      { key: "pat", label: "パターン", def: 0, min: 0, max: 19, options: ["強気パターンすべて", "包み足（陽の包み）", "ハンマー・たくり線", "逆ハンマー", "明けの明星", "切り込み線", "はらみ足（陽）", "赤三兵", "毛抜き底", "下落後の十字線", "窓を開けて上昇", "上げ三法", "（空売り向け）弱気パターンすべて", "（空売り向け）包み足（陰の包み）", "（空売り向け）流れ星・首つり線", "（空売り向け）宵の明星", "（空売り向け）かぶせ線", "（空売り向け）黒三兵", "（空売り向け）毛抜き天井", "（空売り向け）窓を開けて下落"] },
+      { key: "hold", label: "最長で持つ（日）", def: 10, min: 1, max: 60 },
+    ],
+  },
+  chartpat: {
+    group: "pat",
+    label: "チャートパターン",
+    desc: "山と谷を自動で見つけて、選んだ形ができたあと、ネックライン（形の節目）を抜けたら入る。形の高さぶん動いたら利確、形の端を逆に抜けたら損切り、N日たったら手じまい。",
+    params: [
+      { key: "pat", label: "パターン", def: 0, min: 0, max: 8, options: ["強気パターンすべて", "ダブルボトム", "トリプルボトム", "逆三尊（逆ヘッド＆ショルダー）", "カップ・ウィズ・ハンドル", "（空売り向け）弱気パターンすべて", "（空売り向け）ダブルトップ", "（空売り向け）トリプルトップ", "（空売り向け）三尊（ヘッド＆ショルダー）"] },
+      { key: "width", label: "山・谷の幅（本）", def: 5, min: 2, max: 20 },
+      { key: "tol", label: "高さのずれ（%以内）", def: 3, min: 0.5, max: 10, step: 0.5 },
+      { key: "hold", label: "最長で持つ（日）", def: 60, min: 5, max: 250 },
+    ],
+  },
   hold: {
+    group: "etc",
     label: "買って持ち続ける",
     desc: "最初に買って、そのまま持ち続ける（比較用）。",
     params: [],
   },
 };
+
+// 戦略の並び（画面の見出し）
+export const STRATEGY_GROUPS = { trend: "トレンドに乗る", break: "ブレイク・出来高で入る", rev: "逆張り・押し目", pat: "パターン", etc: "季節・恐怖指数・比較用" };
 
 export const DEFAULT_CFG = {
   strategy: "sma",
@@ -152,13 +336,7 @@ export const DEFAULT_CFG = {
 export function normalizeCfg(c) {
   const cfg = { ...DEFAULT_CFG, ...(c || {}) };
   const st = STRATEGIES[cfg.strategy] ? cfg.strategy : "sma";
-  const params = {};
-  for (const p of STRATEGIES[st].params) {
-    const v = Number(cfg.params?.[p.key]);
-    const step = p.step || 1;
-    params[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, Math.round(v / step) * step)) : p.def;
-    if (p.step) params[p.key] = Number(params[p.key].toFixed(4));
-  }
+  const params = normParams(st, cfg.params);
   const num = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
   return {
     strategy: st,
@@ -189,6 +367,18 @@ export function normalizeCfg(c) {
   };
 }
 
+// 戦略の数値を、決められた範囲と刻みにそろえる
+export function normParams(st, given) {
+  const params = {};
+  for (const p of STRATEGIES[st].params) {
+    const v = Number(given?.[p.key]);
+    const step = p.step || 1;
+    params[p.key] = Number.isFinite(v) ? Math.min(p.max, Math.max(p.min, Math.round(v / step) * step)) : p.def;
+    if (p.step) params[p.key] = Number(params[p.key].toFixed(4));
+  }
+  return params;
+}
+
 function normalizeFilter(f, num) {
   if (f?.kind === "season") return { kind: "season", key: "", role: f.role === "only" ? "only" : "avoid", lag: false, m1: Math.round(num(f.m1, 1, 12, 5)), m2: Math.round(num(f.m2, 1, 12, 10)) };
   const key = String(f?.key ?? "").trim().toUpperCase();
@@ -196,6 +386,10 @@ function normalizeFilter(f, num) {
   const base = { key, role: f.role === "only" ? "only" : "avoid", lag: !!f.lag };
   if (f.kind === "trend") return { kind: "trend", ...base, ma: Math.round(num(f.ma, 5, 400, 200)), cond: f.cond === "above" ? "above" : "below" };
   if (f.kind === "level") return { kind: "level", ...base, op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 1000, 25) };
+  // sig: key の値動きに戦略をあてはめ、その戦略が「持つ」(cond=on) / 「持たない」(off) の状態か
+  if (f.kind === "sig") return STRATEGIES[f.strat] && !STRATEGIES[f.strat].needsVol && f.strat !== "hold" ? { kind: "sig", ...base, strat: f.strat, params: normParams(f.strat, f.params), cond: f.cond === "off" ? "off" : "on" } : null;
+  // osc: key の値動きから指標（rsi / adx / atrp=ATRの株価比%）を計算し、th より op=gt 上 / lt 下
+  if (f.kind === "osc") return ["rsi", "adx", "atrp"].includes(f.osc) ? { kind: "osc", ...base, osc: f.osc, n: Math.round(num(f.n, 2, 200, 14)), op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 100, 50) } : null;
   if (f.kind === "dd") return { kind: "dd", ...base, op: f.op === "lt" ? "lt" : "gt", days: Math.round(num(f.days, 20, 750, 250)), th: num(f.th, 0, 90, 10) };
   if (f.kind === "rate") return { kind: "rate", ...base, dir: f.dir === "down" ? "down" : "up", days: Math.round(num(f.days, 20, 750, 180)), th: num(f.th, 0, 10, 0.25) };
   return null;
@@ -235,6 +429,199 @@ function emaArr(a, n) {
   return out;
 }
 
+// 値動きの大きさ（ATR、ワイルダーの平均）
+function atrArr(bars, n) {
+  const out = new Array(bars.length).fill(null);
+  let a = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const tr = Math.max(bars[i].h - bars[i].l, Math.abs(bars[i].h - bars[i - 1].c), Math.abs(bars[i].l - bars[i - 1].c));
+    if (i < n) a += tr;
+    else if (i === n) { a = (a + tr) / n; out[i] = a; }
+    else { a = (a * (n - 1) + tr) / n; out[i] = a; }
+  }
+  return out;
+}
+// トレンドの強さ ADX と、上向きの力 +DI・下向きの力 −DI
+function dmiArr(bars, n) {
+  const L = bars.length, adx = new Array(L).fill(null), pdi = new Array(L).fill(null), mdi = new Array(L).fill(null);
+  let tr = 0, p = 0, m = 0, dxSum = 0, cnt = 0, ad = null;
+  for (let i = 1; i < L; i++) {
+    const up = bars[i].h - bars[i - 1].h, dn = bars[i - 1].l - bars[i].l;
+    const pdm = up > dn && up > 0 ? up : 0, mdm = dn > up && dn > 0 ? dn : 0;
+    const t = Math.max(bars[i].h - bars[i].l, Math.abs(bars[i].h - bars[i - 1].c), Math.abs(bars[i].l - bars[i - 1].c));
+    if (i <= n) { tr += t; p += pdm; m += mdm; if (i < n) continue; }
+    else { tr = tr - tr / n + t; p = p - p / n + pdm; m = m - m / n + mdm; }
+    const P = tr ? 100 * p / tr : 0, M = tr ? 100 * m / tr : 0, dx = P + M ? 100 * Math.abs(P - M) / (P + M) : 0;
+    pdi[i] = P; mdi[i] = M;
+    if (ad == null) { dxSum += dx; cnt++; if (cnt === n) { ad = dxSum / n; adx[i] = ad; } }
+    else { ad = (ad * (n - 1) + dx) / n; adx[i] = ad; }
+  }
+  return { adx, pdi, mdi };
+}
+// 期間 n の最高値・最安値（i を含む）
+const hhv = (bars, i, n, f = "h") => { let v = -Infinity; for (let k = Math.max(0, i - n + 1); k <= i; k++) v = Math.max(v, bars[k][f]); return v; };
+const llv = (bars, i, n, f = "l") => { let v = Infinity; for (let k = Math.max(0, i - n + 1); k <= i; k++) v = Math.min(v, bars[k][f]); return v; };
+// アルティメット・オシレーター（7・14・28日）
+function uoArr(bars) {
+  const L = bars.length, out = new Array(L).fill(null), bp = [0], trr = [0];
+  for (let i = 1; i < L; i++) {
+    const lo = Math.min(bars[i].l, bars[i - 1].c), hi = Math.max(bars[i].h, bars[i - 1].c);
+    bp.push(bars[i].c - lo); trr.push(hi - lo);
+  }
+  const avg = (i, n) => { let a = 0, b = 0; for (let k = i - n + 1; k <= i; k++) { a += bp[k]; b += trr[k]; } return b ? a / b : 0.5; };
+  for (let i = 28; i < L; i++) out[i] = 100 * (4 * avg(i, 7) + 2 * avg(i, 14) + avg(i, 28)) / 7;
+  return out;
+}
+// ストキャスティクスの %K（smooth>1 ならスロー）
+function stochK(bars, n, smooth = 1) {
+  const L = bars.length, k = new Array(L).fill(null);
+  for (let i = n - 1; i < L; i++) { const hh = hhv(bars, i, n), ll = llv(bars, i, n); k[i] = hh > ll ? (bars[i].c - ll) / (hh - ll) * 100 : 50; }
+  if (smooth <= 1) return k;
+  const out = new Array(L).fill(null);
+  for (let i = n - 1 + smooth - 1; i < L; i++) { let s = 0; for (let j = i - smooth + 1; j <= i; j++) s += k[j]; out[i] = s / smooth; }
+  return out;
+}
+
+/* ---------- ローソク足の形 ---------- */
+// i 日目の足が、各パターンにあてはまるか。down / up は「その前に下げていた / 上げていた」
+function candleAt(bars, i, down, up) {
+  const B = j => bars[j], body = j => Math.abs(B(j).c - B(j).o), rng = j => Math.max(B(j).h - B(j).l, 1e-9);
+  const green = j => B(j).c > B(j).o, red = j => B(j).c < B(j).o;
+  const upSh = j => B(j).h - Math.max(B(j).o, B(j).c), loSh = j => Math.min(B(j).o, B(j).c) - B(j).l;
+  const longBody = j => body(j) >= rng(j) * 0.6;
+  const mid = j => (B(j).o + B(j).c) / 2;
+  const r = {};
+  if (i < 1) return r;
+  const a = i - 1;
+  // 強気
+  r[1] = down && red(a) && green(i) && B(i).o <= B(a).c && B(i).c >= B(a).o && body(i) > body(a);
+  r[2] = down && loSh(i) >= 2 * body(i) && upSh(i) <= Math.max(body(i) * 0.5, rng(i) * 0.1) && body(i) > 0;
+  r[3] = down && upSh(i) >= 2 * body(i) && loSh(i) <= Math.max(body(i) * 0.5, rng(i) * 0.1) && body(i) > 0;
+  r[5] = down && red(a) && longBody(a) && green(i) && B(i).o < B(a).c && B(i).c > mid(a) && B(i).c < B(a).o;
+  r[6] = down && red(a) && longBody(a) && green(i) && B(i).o > B(a).c && B(i).c < B(a).o && body(i) < body(a) * 0.6;
+  r[8] = down && red(a) && green(i) && Math.abs(B(i).l - B(a).l) <= B(i).l * 0.002;
+  r[9] = down && body(i) <= rng(i) * 0.1 && rng(i) > 0;
+  r[10] = B(i).l > B(a).h;
+  // 弱気（空売り向け）
+  r[13] = up && green(a) && red(i) && B(i).o >= B(a).c && B(i).c <= B(a).o && body(i) > body(a);
+  r[14] = up && ((upSh(i) >= 2 * body(i) && loSh(i) <= Math.max(body(i) * 0.5, rng(i) * 0.1)) || (loSh(i) >= 2 * body(i) && upSh(i) <= Math.max(body(i) * 0.5, rng(i) * 0.1))) && body(i) > 0;
+  r[16] = up && green(a) && longBody(a) && red(i) && B(i).o > B(a).c && B(i).c < mid(a) && B(i).c > B(a).o;
+  r[18] = up && green(a) && red(i) && Math.abs(B(i).h - B(a).h) <= B(i).h * 0.002;
+  r[19] = B(i).h < B(a).l;
+  if (i >= 2) {
+    const z = i - 2;
+    r[4] = down && red(z) && longBody(z) && body(a) <= body(z) * 0.4 && Math.max(B(a).o, B(a).c) < B(z).c && green(i) && B(i).c > mid(z);
+    r[7] = [z, a, i].every(green) && B(a).c > B(z).c && B(i).c > B(a).c && B(a).o > B(z).o && B(a).o < B(z).c && B(i).o > B(a).o && B(i).o < B(a).c && [z, a, i].every(j => upSh(j) <= body(j) * 0.5);
+    r[15] = up && green(z) && longBody(z) && body(a) <= body(z) * 0.4 && Math.min(B(a).o, B(a).c) > B(z).c && red(i) && B(i).c < mid(z);
+    r[17] = [z, a, i].every(red) && B(a).c < B(z).c && B(i).c < B(a).c && B(a).o < B(z).o && B(a).o > B(z).c && B(i).o < B(a).o && B(i).o > B(a).c && [z, a, i].every(j => loSh(j) <= body(j) * 0.5);
+  }
+  if (i >= 4) {
+    const f = i - 4;
+    r[11] = green(f) && longBody(f) && [i - 3, i - 2, i - 1].every(j => body(j) < body(f) * 0.6 && B(j).h <= B(f).h && B(j).l >= B(f).l) && green(i) && B(i).c > B(f).c;
+  }
+  return r;
+}
+const BULL_PATS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], BEAR_PATS = [13, 14, 15, 16, 17, 18, 19];
+
+/* ---------- チャートパターン（山と谷から） ---------- */
+// width 本の左右より高い足を山、低い足を谷とする。i 日目には i-width までの山・谷しか分からない
+function chartSignals(bars, p) {
+  const n = bars.length, w = p.width, tol = p.tol / 100, out = new Array(n).fill(0);
+  const bear = p.pat >= 5;
+  const want = bear ? (p.pat === 5 ? [6, 7, 8] : [p.pat]) : (p.pat === 0 ? [1, 2, 3, 4] : [p.pat]);
+  const piv = []; // { t: "H"|"L", i, v }
+  let setup = null, pos = null;
+  const near = (a, b) => Math.abs(a - b) <= Math.max(a, b) * tol;
+  const addPivot = q => {
+    const last = piv[piv.length - 1];
+    if (last && last.t === q.t) { if (q.t === "H" ? q.v > last.v : q.v < last.v) piv[piv.length - 1] = q; }
+    else piv.push(q);
+    if (piv.length > 12) piv.shift();
+  };
+  const find = () => {
+    const P = piv, k = P.length, lastT = P[k - 1]?.t;
+    const sets = [];
+    // 強気：最後が谷
+    if (lastT === "L") {
+      const [L1, H1, L2] = P.slice(-3);
+      if (k >= 3 && want.includes(1) && near(L1.v, L2.v) && H1.v > Math.max(L1.v, L2.v) * (1 + 2 * tol)) sets.push({ neck: H1.v, stop: Math.min(L1.v, L2.v) });
+      if (k >= 5) {
+        const [A, H1b, B, H2b, C] = P.slice(-5);
+        const neck = Math.max(H1b.v, H2b.v);
+        if (want.includes(2) && near(A.v, B.v) && near(B.v, C.v) && near(A.v, C.v)) sets.push({ neck, stop: Math.min(A.v, B.v, C.v) });
+        if (want.includes(3) && B.v < A.v * (1 - tol) && B.v < C.v * (1 - tol) && near(A.v, C.v)) sets.push({ neck, stop: B.v });
+      }
+      if (k >= 4 && want.includes(4)) {
+        const [R1, Cb, R2, Hd] = P.slice(-4);
+        const depth = (R1.v - Cb.v) / R1.v;
+        if (R1.t === "H" && near(R1.v, R2.v) && depth >= 0.1 && depth <= 0.5 && Hd.v > Cb.v + (R1.v - Cb.v) * 0.5) sets.push({ neck: Math.max(R1.v, R2.v), stop: Hd.v });
+      }
+    }
+    // 弱気：最後が山
+    if (lastT === "H") {
+      const [H1, L1, H2] = P.slice(-3);
+      if (k >= 3 && want.includes(6) && near(H1.v, H2.v) && L1.v < Math.min(H1.v, H2.v) * (1 - 2 * tol)) sets.push({ neck: L1.v, stop: Math.max(H1.v, H2.v) });
+      if (k >= 5) {
+        const [A, L1b, B, L2b, C] = P.slice(-5);
+        const neck = Math.min(L1b.v, L2b.v);
+        if (want.includes(7) && near(A.v, B.v) && near(B.v, C.v) && near(A.v, C.v)) sets.push({ neck, stop: Math.max(A.v, B.v, C.v) });
+        if (want.includes(8) && B.v > A.v * (1 + tol) && B.v > C.v * (1 + tol) && near(A.v, C.v)) sets.push({ neck, stop: B.v });
+      }
+    }
+    return sets[0] || null;
+  };
+  for (let i = 0; i < n; i++) {
+    const j = i - w; // 今日はっきりする山・谷の候補
+    if (j >= w) {
+      let isH = true, isL = true;
+      for (let k = j - w; k <= j + w; k++) { if (k === j) continue; if (bars[k].h > bars[j].h) isH = false; if (bars[k].l < bars[j].l) isL = false; }
+      if (isH) addPivot({ t: "H", i: j, v: bars[j].h });
+      if (isL) addPivot({ t: "L", i: j, v: bars[j].l });
+      if (isH || isL) { const s = find(); if (s) setup = { ...s, from: i }; }
+    }
+    const c = bars[i].c;
+    if (pos) {
+      const hit = bear ? c <= pos.target : c >= pos.target, broke = bear ? c > pos.stop : c < pos.stop;
+      if (hit || broke || i - pos.at >= p.hold) pos = null;
+    } else if (setup) {
+      if (bear ? c > setup.stop : c < setup.stop) setup = null;
+      else if (i - setup.from > w * 8) setup = null;
+      else if (bear ? c < setup.neck : c > setup.neck) {
+        const h = Math.abs(setup.neck - setup.stop);
+        pos = { at: i, stop: setup.stop, target: bear ? setup.neck - h : setup.neck + h };
+        setup = null;
+      }
+    }
+    out[i] = pos ? 1 : 0;
+  }
+  return out;
+}
+
+// テクニカル評価：移動平均12本と指標7つの多数決（−1〜+1）
+function ratingArr(bars) {
+  const c = bars.map(b => b.c), L = c.length;
+  const mas = [10, 20, 30, 50, 100, 200].flatMap(n => [smaArr(c, n), emaArr(c, n)]);
+  const rsi = rsiArr(c, 14), st = stochK(bars, 14, 3), ef = emaArr(c, 12), es = emaArr(c, 26), dm = dmiArr(bars, 14), uo = uoArr(bars);
+  const macd = c.map((_, i) => ef[i] != null && es[i] != null ? ef[i] - es[i] : null), start = macd.findIndex(v => v != null);
+  const sig = new Array(L).fill(null);
+  if (start >= 0) { const e = emaArr(macd.slice(start), 9); for (let i = 0; i < e.length; i++) sig[start + i] = e[i]; }
+  const out = new Array(L).fill(null);
+  for (let i = 0; i < L; i++) {
+    const mv = mas.filter(m => m[i] != null).map(m => c[i] > m[i] ? 1 : c[i] < m[i] ? -1 : 0);
+    const ov = [];
+    if (rsi[i] != null) ov.push(rsi[i] < 30 ? 1 : rsi[i] > 70 ? -1 : 0);
+    if (st[i] != null) ov.push(st[i] < 20 ? 1 : st[i] > 80 ? -1 : 0);
+    if (macd[i] != null && sig[i] != null) ov.push(macd[i] > sig[i] ? 1 : -1);
+    if (i >= 10) ov.push(c[i] > c[i - 10] ? 1 : -1);
+    if (dm.adx[i] != null) ov.push(dm.adx[i] > 20 ? (dm.pdi[i] > dm.mdi[i] ? 1 : -1) : 0);
+    if (uo[i] != null) ov.push(uo[i] < 30 ? 1 : uo[i] > 70 ? -1 : 0);
+    if (mv.length < 4 || ov.length < 3) continue;
+    const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+    out[i] = (avg(mv) + avg(ov)) / 2;
+  }
+  return out;
+}
+
 // 各日の「持ちたいか（1）／持ちたくないか（0）」。その日までのデータだけで判定する
 // cfg.trendMa があれば、終値がその移動平均より上のときだけ持つ
 // vol = { bars, lag }：恐怖指数を使う戦略用
@@ -265,6 +652,231 @@ function rawSignals(bars, strategy, p, vol) {
     }
     return out;
   }
+  if (strategy === "ema") {
+    const s = emaArr(c, p.short), l = emaArr(c, p.long);
+    for (let i = 0; i < n; i++) out[i] = s[i] != null && l[i] != null && s[i] > l[i] ? 1 : 0;
+    return out;
+  }
+  if (strategy === "ichimoku") {
+    const mid = (i, k) => (hhv(bars, i, k) + llv(bars, i, k)) / 2;
+    const tk = [], kj = [], sa = [], sb = [];
+    for (let i = 0; i < n; i++) {
+      tk[i] = i >= p.tenkan - 1 ? mid(i, p.tenkan) : null;
+      kj[i] = i >= p.kijun - 1 ? mid(i, p.kijun) : null;
+      sa[i] = tk[i] != null && kj[i] != null ? (tk[i] + kj[i]) / 2 : null;
+      sb[i] = i >= p.senkou - 1 ? mid(i, p.senkou) : null;
+    }
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      const j = i - p.kijun; // 雲は基準線の日数だけ先にずらして描く
+      if (j >= 0 && sa[j] != null && sb[j] != null && tk[i] != null && kj[i] != null) {
+        const top = Math.max(sa[j], sb[j]);
+        if (!pos && tk[i] > kj[i] && c[i] > top && c[i] > c[i - p.kijun]) pos = 1;
+        else if (pos && c[i] < top) pos = 0;
+      }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "psar") {
+    if (n < 3) return out;
+    let isUp = c[1] >= c[0], af = p.step, ep = isUp ? Math.max(bars[0].h, bars[1].h) : Math.min(bars[0].l, bars[1].l), sar = isUp ? Math.min(bars[0].l, bars[1].l) : Math.max(bars[0].h, bars[1].h);
+    for (let i = 2; i < n; i++) {
+      sar += af * (ep - sar);
+      if (isUp) {
+        sar = Math.min(sar, bars[i - 1].l, bars[i - 2].l);
+        if (bars[i].l < sar) { isUp = false; sar = ep; ep = bars[i].l; af = p.step; }
+        else if (bars[i].h > ep) { ep = bars[i].h; af = Math.min(p.max, af + p.step); }
+      } else {
+        sar = Math.max(sar, bars[i - 1].h, bars[i - 2].h);
+        if (bars[i].h > sar) { isUp = true; sar = ep; ep = bars[i].h; af = p.step; }
+        else if (bars[i].l < ep) { ep = bars[i].l; af = Math.min(p.max, af + p.step); }
+      }
+      out[i] = isUp ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "supertrend") {
+    const a = atrArr(bars, p.period);
+    let fu = null, fl = null, dir = 0;
+    for (let i = 1; i < n; i++) {
+      if (a[i] == null) continue;
+      const hl = (bars[i].h + bars[i].l) / 2, bu = hl + p.mult * a[i], bl = hl - p.mult * a[i];
+      fu = fu == null || bu < fu || c[i - 1] > fu ? bu : fu;
+      fl = fl == null || bl > fl || c[i - 1] < fl ? bl : fl;
+      if (!dir) dir = c[i] > hl ? 1 : -1;
+      else if (dir === 1 && c[i] < fl) dir = -1;
+      else if (dir === -1 && c[i] > fu) dir = 1;
+      out[i] = dir === 1 ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "adx") {
+    const d = dmiArr(bars, p.period);
+    let pos = 0;
+    for (let i = p.box; i < n; i++) {
+      const hh = hhv(bars, i - 1, p.box), ll = llv(bars, i - 1, p.box);
+      if (!pos && d.adx[i - 1] != null && d.adx[i - 1] < p.th && c[i] > hh) pos = 1;
+      else if (pos && c[i] < ll) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "linreg") {
+    let pos = 0;
+    const N = p.period, sx = N * (N - 1) / 2, sxx = (N - 1) * N * (2 * N - 1) / 6;
+    for (let i = N - 1; i < n; i++) {
+      let sy = 0, sxy = 0;
+      for (let k = 0; k < N; k++) { const y = c[i - N + 1 + k]; sy += y; sxy += k * y; }
+      const b = (N * sxy - sx * sy) / (N * sxx - sx * sx), a0 = (sy - b * sx) / N, line = a0 + b * (N - 1);
+      let ss = 0; for (let k = 0; k < N; k++) { const e = c[i - N + 1 + k] - (a0 + b * k); ss += e * e; }
+      const sd = Math.sqrt(ss / N);
+      if (!pos && b > 0 && c[i] > line) pos = 1;
+      else if (pos && (b < 0 || c[i] < line - p.k * sd)) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "rating") {
+    const r = ratingArr(bars);
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (r[i] != null) { if (!pos && r[i] > p.buy) pos = 1; else if (pos && r[i] < p.sell) pos = 0; }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "keltner") {
+    const m = emaArr(c, p.period), a = atrArr(bars, p.period);
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (m[i] != null && a[i] != null) { if (!pos && c[i] > m[i] + p.mult * a[i]) pos = 1; else if (pos && c[i] < m[i]) pos = 0; }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "volexp") {
+    const a = atrArr(bars, p.period), m = smaArr(c, p.exit);
+    let pos = 0;
+    for (let i = 1; i < n; i++) {
+      const r = bars[i].h - bars[i].l;
+      if (!pos && a[i - 1] != null && r > p.k * a[i - 1] && c[i] > bars[i].o && c[i] >= bars[i].l + r * 0.7) pos = 1;
+      else if (pos && m[i] != null && c[i] < m[i]) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "insidebar") {
+    let pos = null;
+    for (let i = 2; i < n; i++) {
+      if (pos) { if (c[i] < pos.stop || i - pos.at >= p.hold) pos = null; }
+      else if (bars[i - 1].h < bars[i - 2].h && bars[i - 1].l > bars[i - 2].l && c[i] > bars[i - 2].h) pos = { at: i, stop: bars[i - 2].l };
+      out[i] = pos ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "pivot") {
+    let ph = null, pl = null, pos = 0;
+    for (let i = 0; i < n; i++) {
+      const j = i - p.right;
+      if (j - p.left >= 0) {
+        let isH = true, isL = true;
+        for (let k = j - p.left; k <= i; k++) { if (k === j) continue; if (bars[k].h >= bars[j].h) isH = false; if (bars[k].l <= bars[j].l) isL = false; }
+        if (isH) ph = bars[j].h;
+        if (isL) pl = bars[j].l;
+      }
+      if (!pos && ph != null && c[i] > ph) pos = 1;
+      else if (pos && pl != null && c[i] < pl) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "volume") {
+    const m = smaArr(c, p.exit);
+    let pos = 0, sum = 0;
+    for (let i = 0; i < n; i++) {
+      const avg = i >= p.period ? sum / p.period : null;
+      if (!pos && avg > 0 && bars[i].v > p.k * avg && c[i] > bars[i].o && i > 0 && c[i] > c[i - 1]) pos = 1;
+      else if (pos && m[i] != null && c[i] < m[i]) pos = 0;
+      out[i] = pos;
+      sum += bars[i].v || 0; if (i >= p.period) sum -= bars[i - p.period].v || 0;
+    }
+    return out;
+  }
+  if (strategy === "vwap") {
+    let pv = 0, vv = 0;
+    for (let i = 0; i < n; i++) {
+      const tp = (bars[i].h + bars[i].l + c[i]) / 3, v = bars[i].v || 0;
+      pv += tp * v; vv += v;
+      if (i >= p.period) { const o = bars[i - p.period], ov = o.v || 0; pv -= (o.h + o.l + o.c) / 3 * ov; vv -= ov; }
+      out[i] = i >= p.period - 1 && vv > 0 && c[i] > pv / vv ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "vprofile") {
+    let pos = 0;
+    const BINS = 24;
+    for (let i = p.period; i < n; i++) {
+      let lo = Infinity, hi = -Infinity, tot = 0;
+      for (let k = i - p.period; k < i; k++) { lo = Math.min(lo, bars[k].l); hi = Math.max(hi, bars[k].h); tot += bars[k].v || 0; }
+      if (!(hi > lo) || !(tot > 0)) { out[i] = pos; continue; }
+      const step = (hi - lo) / BINS, vol = new Array(BINS).fill(0);
+      for (let k = i - p.period; k < i; k++) { const tp = (bars[k].h + bars[k].l + bars[k].c) / 3; vol[Math.min(BINS - 1, Math.floor((tp - lo) / step))] += bars[k].v || 0; }
+      let poc = 0; for (let b = 1; b < BINS; b++) if (vol[b] > vol[poc]) poc = b;
+      let a = poc, z = poc, got = vol[poc];
+      while (got < tot * 0.7 && (a > 0 || z < BINS - 1)) { const dn = a > 0 ? vol[a - 1] : -1, upv = z < BINS - 1 ? vol[z + 1] : -1; if (upv >= dn) { z++; got += upv; } else { a--; got += dn; } }
+      const vah = lo + (z + 1) * step, pocP = lo + (poc + 0.5) * step;
+      if (!pos && c[i] > vah) pos = 1; else if (pos && c[i] < pocP) pos = 0;
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "uo") {
+    const u = uoArr(bars);
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (u[i] != null) { if (!pos && u[i] < p.buy) pos = 1; else if (pos && u[i] > p.sell) pos = 0; }
+      out[i] = pos;
+    }
+    return out;
+  }
+  if (strategy === "fibo") {
+    const lv = [0.382, 0.5, 0.618][p.level], tg = [1, 1.272, 1.618][p.target];
+    let pos = null;
+    for (let i = p.look; i < n; i++) {
+      if (pos) {
+        if (c[i] >= pos.target || c[i] < pos.stop || i - pos.at >= 60) pos = null;
+      } else {
+        // 直近の高値と、その前の安値
+        let ih = i - p.look; for (let k = i - p.look; k < i; k++) if (bars[k].h > bars[ih].h) ih = k;
+        let il = i - p.look; for (let k = i - p.look; k <= ih; k++) if (bars[k].l < bars[il].l) il = k;
+        const H = bars[ih].h, Lw = bars[il].l;
+        if (ih > il && Lw > 0 && (H - Lw) / Lw * 100 >= p.swing && i - ih >= 2) {
+          const level = H - lv * (H - Lw);
+          if (bars[i].l <= level && c[i] > level && c[i] > bars[i].o && llv(bars, i - 1, i - ih) > Lw) pos = { at: i, stop: Lw, target: Lw + tg * (H - Lw) };
+        }
+      }
+      out[i] = pos ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "candle") {
+    const bearSide = p.pat >= 12;
+    const entry = p.pat === 0 ? BULL_PATS : p.pat === 12 ? BEAR_PATS : [p.pat];
+    const exitP = bearSide ? BULL_PATS : BEAR_PATS;
+    const m = smaArr(c, 10);
+    let pos = null;
+    for (let i = 1; i < n; i++) {
+      // 反転型は、前日の終値が10日線より下（空売り向けは上）のときだけ
+      const down = m[i - 1] != null && c[i - 1] < m[i - 1], up = m[i - 1] != null && c[i - 1] > m[i - 1];
+      const r = candleAt(bars, i, down, up);
+      if (pos) { if (exitP.some(k => r[k]) || i - pos >= p.hold) pos = null; }
+      else if (entry.some(k => r[k])) pos = i;
+      out[i] = pos != null ? 1 : 0;
+    }
+    return out;
+  }
+  if (strategy === "chartpat") return chartSignals(bars, p);
   if (strategy === "boll") {
     const m = smaArr(c, p.period);
     let pos = 0;
@@ -283,14 +895,10 @@ function rawSignals(bars, strategy, p, vol) {
     return out;
   }
   if (strategy === "stoch") {
+    const k = stochK(bars, p.period, p.smooth || 1);
     let pos = 0;
     for (let i = 0; i < n; i++) {
-      if (i >= p.period - 1) {
-        let hh = -Infinity, ll = Infinity;
-        for (let k = i - p.period + 1; k <= i; k++) { hh = Math.max(hh, bars[k].h); ll = Math.min(ll, bars[k].l); }
-        const kv = hh > ll ? (c[i] - ll) / (hh - ll) * 100 : 50;
-        if (!pos && kv < p.buy) pos = 1; else if (pos && kv > p.sell) pos = 0;
-      }
+      if (k[i] != null) { if (!pos && k[i] < p.buy) pos = 1; else if (pos && k[i] > p.sell) pos = 0; }
       out[i] = pos;
     }
     return out;
@@ -395,6 +1003,11 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
       const at = D => { while (ip + 1 < b.length && (f.lag ? b[ip + 1].d < D : b[ip + 1].d <= D)) ip++; return ip; };
       let cond;
       if (f.kind === "trend") { const m = smaArr(b.map(x => x.c), f.ma); cond = i => m[i] == null ? null : (f.cond === "above" ? b[i].c > m[i] : b[i].c <= m[i]); }
+      else if (f.kind === "sig") { const sg = signals(b, f.strat, f.params); cond = i => f.cond === "off" ? !sg[i] : !!sg[i]; }
+      else if (f.kind === "osc") {
+        const v = f.osc === "rsi" ? rsiArr(b.map(x => x.c), f.n) : f.osc === "adx" ? dmiArr(b, f.n).adx : atrArr(b, f.n).map((a, i) => a == null ? null : a / b[i].c * 100);
+        cond = i => v[i] == null ? null : (f.op === "gt" ? v[i] > f.th : v[i] < f.th);
+      }
       else if (f.kind === "dd") cond = i => {
         let hi = 0; for (let k = Math.max(0, i - f.days + 1); k <= i; k++) hi = Math.max(hi, b[k].c);
         const dd = hi > 0 ? (hi - b[i].c) / hi * 100 : 0;
