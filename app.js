@@ -1,6 +1,6 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg, regimeMap, precomputeSignals } from "./engine.js";
-import { GRIDS, backtest, sweep, segmentize, segReturns } from "./research.js";
+import { GRIDS, backtest, sweep, segmentize, segReturns, combos, validParams, partMetrics } from "./research.js";
 
 const CFG = window.ST_CONFIG;
 const sb = createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -424,7 +424,7 @@ async function addBench(m, data, from) {
 }
 
 /* ---------- 自動探索の結果（優先する見方で並べかえる） ---------- */
-let exState = null;
+let exState = null, exAll = [];
 // 自動探索で、初期値に加えて試す「長め」の設定
 const EX_VARIANTS = {
   sma: [{ short: 50, long: 200 }], ema: [{ short: 50, long: 200 }], tma: [{ short: 20, mid: 50, long: 200 }],
@@ -475,7 +475,8 @@ function renderEx() {
     const id = `${x.r.st}|${JSON.stringify(x.r.params)}|${x.r.M.totalPct.toFixed(3)}|${x.r.M.maxDDPct.toFixed(3)}|${x.r.M.trades}`;
     if (seen.has(id)) seen.get(id).same.push(x.r.c); else seen.set(id, { ...x.r, pass: x.p, same: [] });
   }
-  exRows = [...seen.values()].slice(0, 15);
+  exAll = [...seen.values()];
+  exRows = exAll.slice(0, 15);
   const nPass = sorted.filter(x => x.p).length;
   const metric = M => ({ half: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, balance: null, ret: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, dd: `下落 -${M.maxDDPct.toFixed(0)}%`, sharpe: `効率 ${M.sharpe.toFixed(2)}`, calmar: `${calmar(M).toFixed(2)}` })[prio];
   const unitName = { year: "1年", half: "半年", quarter: "3か月" }[unit];
@@ -500,13 +501,100 @@ function renderEx() {
     <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
     <div class="segrow base"><div class="t"><span>${esc(bname)}を持ち続けた場合</span><span class="num">${prio === "balance" ? "" : `<b>${metric(benchM)}</b>`}<span class="${cls(benchM.totalPct)}">${pct(benchM.totalPct)}</span><small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
     ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(stName(r))}<small>${esc(ruleText(r.c, r.act))}${r.same.length ? `<br>（同じ結果：${esc(r.same.slice(0, 3).map(c => ruleText(c, r.act)).join("、"))}${r.same.length > 3 ? ` ほか${r.same.length - 3}件` : ""}）` : ""}</small></span><span class="num">${right(r.M, r.wins)}</span></div>${strip(r.seg, r.ex)}</div>`).join("")}
-    <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
+    <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>
+    <button class="btn ghost" id="exTune">上位5件の数値を詰める</button>
+    <p class="hint" style="margin-top:6px">上の並びで上から5件（数値のない「買って持ち続ける」は飛ばします）について、戦略の数値（日数や基準）を組み合わせて試します。期間の前半7割で一番良い数値を選び、残り3割で本当に良くなるかを確かめます。</p>
+    <div id="exTuneOut"></div>`;
+  if ($("exTune")) $("exTune").onclick = runTune;
   out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
     const r = exRows[Number(tr.dataset.i)];
     $("btStrategy").value = r.st; renderParams();
     for (const [k, v] of Object.entries(r.params || {})) { const el = $("bp_" + k); if (el) el.value = v; }
     rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
     if (r.c) $("btRgAct").value = r.act;
+    $("btRun").click();
+  });
+}
+
+/* ---------- 上位の組み合わせの数値を詰める ---------- */
+// 並べ方ごとの「良さ」。大きいほど良い（2つめは同点のときの比べ方）
+function prioScore(prio, M, B) {
+  const ddR = M.maxDDPct > 0 ? B.maxDDPct * 0.5 / M.maxDDPct : 9, cR = B.cagrPct > 0 ? M.cagrPct / (B.cagrPct * 0.9) : (M.cagrPct >= B.cagrPct ? 1 : 0);
+  if (prio === "half") return [Math.min(cR, ddR, 1.0001), M.cagrPct];
+  if (prio === "ret") return [M.totalPct, 0];
+  if (prio === "dd") return [M.cagrPct >= B.cagrPct * 0.7 ? 1 : 0, -M.maxDDPct];
+  if (prio === "calmar") return [calmar(M), 0];
+  return [M.sharpe, 0];
+}
+// その並べ方で「指数より良い」と言えるか
+function prioBeats(prio, M, B) {
+  if (prio === "half") return M.cagrPct >= B.cagrPct * 0.9 && M.maxDDPct <= B.maxDDPct * 0.5;
+  if (prio === "ret") return M.totalPct > B.totalPct;
+  if (prio === "dd") return M.cagrPct >= B.cagrPct * 0.7 && M.maxDDPct < B.maxDDPct * 0.7;
+  if (prio === "calmar") return calmar(M) > calmar(B);
+  return M.sharpe > B.sharpe;
+}
+const better = (a, b) => (a[0] - b[0]) || (a[1] - b[1]);
+async function runTune() {
+  const S = exState, out = $("exTuneOut");
+  if (!S) return;
+  const prio = $("exPrio").querySelector(".on")?.dataset.v || "half";
+  // 上から順に、数値を変えられる組み合わせを5つ（買い持ち＋フィルターは数値がないので飛ばす）
+  const cands = exAll.filter(r => r.st !== "hold" && GRIDS[r.st] && Object.keys(GRIDS[r.st]).length).slice(0, 5);
+  if (!cands.length) { out.innerHTML = `<div class="empty">数値を変えられる組み合わせがありません（買って持ち続けるには数値がありません）</div>`; return; }
+  const { dates, data, maps, cfg0, start, m, benchEq } = S;
+  const split = dates[Math.floor(dates.length * 0.7)], last = dates[dates.length - 1];
+  const nx = new Date(split + "T00:00:00Z"); nx.setUTCDate(nx.getUTCDate() + 1);
+  const next = nx.toISOString().slice(0, 10);
+  const bA = partMetrics(benchEq, [], dates[0], split), bB = partMetrics(benchEq, [], next, last);
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  busy($("exTune"), true, "数値を詰めています…");
+  const results = [];
+  try {
+    for (const [ci, r] of cands.entries()) {
+      busy($("exTune"), true, `数値を詰めています… ${ci + 1}/${cands.length}`);
+      await tick();
+      const regime = r.c ? { mode: "auto", action: r.act, filters: [r.c.f] } : { mode: "off" };
+      const run = params => {
+        const cfg = { ...cfg0, strategy: r.st, params, fearSym: STRATEGIES[r.st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false, regime };
+        const res = backtest(cfg, data, { from: start, sig: precomputeSignals(cfg, data), bearMap: r.c ? maps.get(r.c) : undefined, noBench: true });
+        if (!res.metrics) return null;
+        const A = partMetrics(res.equity, res.trades, dates[0], split), B = partMetrics(res.equity, res.trades, next, last);
+        return A && B ? { params: normalizeCfg(cfg).params, A, B, M: res.metrics } : null;
+      };
+      const base = run(r.params);
+      const tried = [];
+      for (const p of combos(GRIDS[r.st])) {
+        const full = { ...r.params, ...p };
+        if (!validParams(r.st, full)) continue;
+        const x = run(full);
+        if (x && x.A.trades > 0) tried.push(x);
+      }
+      if (!base || !tried.length) continue;
+      // 前半だけで一番良い数値を選ぶ（後半の結果は選ぶときに見ない）
+      const best = tried.reduce((a, b) => better(prioScore(prio, b.A, bA), prioScore(prio, a.A, bA)) > 0 ? b : a);
+      const okShare = tried.filter(x => prioBeats(prio, x.B, bB)).length / tried.length * 100;
+      results.push({ r, base, best, n: tried.length, okShare, improved: better(prioScore(prio, best.B, bB), prioScore(prio, base.B, bB)) > 0 });
+    }
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; busy($("exTune"), false); return; }
+  busy($("exTune"), false);
+  const cell = M => `<span class="${cls(M.cagrPct)}">${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
+  const ruleText = (c, act) => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ持つ" : "は降りる") + (act === "nobuy" ? "（新規だけ止める）" : "");
+  out.innerHTML = `<div class="swsum">前半（調整に使う）<span class="num">${fmtD(dates[0])}〜${fmtD(split)}</span>／後半（確かめ）<span class="num">${fmtD(next)}〜${fmtD(last)}</span>。並べ方「${EX_PRIO[prio].label}」の基準で、前半の成績だけを見て数値を選びました。</div>` +
+    results.map((x, i) => `<div class="tune">
+      <div class="t"><b>${esc(STRATEGIES[x.r.st].label)}</b><small>${esc(ruleText(x.r.c, x.r.act))}</small></div>
+      <table class="t sw"><tr><th></th><th>前半 年率<br>下落</th><th>後半 年率<br>下落</th></tr>
+      <tr><td class="p">探索で使った数値<br><span class="mu" style="font-size:11px">${esc(shortParams(x.r.st, x.base.params))}</span></td><td>${cell(x.base.A)}</td><td>${cell(x.base.B)}</td></tr>
+      <tr><td class="p"><b>詰めた数値</b><br><span class="mu" style="font-size:11px">${esc(shortParams(x.r.st, x.best.params))}</span></td><td>${cell(x.best.A)}</td><td>${cell(x.best.B)}</td></tr>
+      <tr><td class="p mu">${esc(S.bname)}</td><td>${cell(bA)}</td><td>${cell(bB)}</td></tr></table>
+      <p class="verdict ${x.improved ? "up" : "dn"}">${x.improved ? "後半でも、探索で使った数値より良くなりました。数値を変える意味がありそうです。" : "後半では、探索で使った数値以下でした。前半に合わせすぎた可能性が高く、元の数値のままが無難です。"}<br><span class="mu">試した${x.n}通りのうち、後半で${esc(S.bname)}より良かった（${esc(EX_PRIO[prio].label)}の基準）のは ${x.okShare.toFixed(0)}%。${x.okShare >= 50 ? "数値を多少変えても崩れにくい組み合わせです。" : x.okShare >= 20 ? "数値によって当たり外れがあります。" : "ほとんどの数値で負けています。たまたま良かっただけかもしれません。"}</span></p>
+      <button class="btn ghost sm" data-tune="${i}">詰めた数値で検証する</button></div>`).join("");
+  out.querySelectorAll("[data-tune]").forEach(b => b.onclick = () => {
+    const x = results[Number(b.dataset.tune)];
+    $("btStrategy").value = x.r.st; renderParams();
+    for (const [k, v] of Object.entries(x.best.params)) { const el = $("bp_" + k); if (el) el.value = v; }
+    rgRows = x.r.c ? [{ ...x.r.c.row }] : []; renderRg();
+    if (x.r.c) $("btRgAct").value = x.r.act;
     $("btRun").click();
   });
 }
@@ -581,7 +669,7 @@ $("exRun").onclick = async () => {
         }
       }
     }
-    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname: benchName(m) };
+    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname: benchName(m), data, maps, cfg0, start, m, benchEq: benchRun.bench.equity };
     renderEx();
   } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   finally { busy($("exRun"), false); }

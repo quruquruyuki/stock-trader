@@ -57,6 +57,16 @@ export function metrics(equity, trades, initial) {
   };
 }
 
+// 資産の推移の一部分（from〜to）だけで成績を出す。始まりは from の前日の資産
+export function partMetrics(equity, trades, from, to) {
+  const i0 = equity.findIndex(e => e.d >= from);
+  if (i0 < 0) return null;
+  let i1 = equity.length - 1; while (i1 >= i0 && equity[i1].d > to) i1--;
+  if (i1 <= i0) return null;
+  const base = i0 > 0 ? equity[i0 - 1].equity : equity[i0].equity;
+  return metrics(equity.slice(i0, i1 + 1), trades.filter(t => t.d >= from && t.d <= to), base);
+}
+
 /* ---------- 期間を区切る ---------- */
 // 日付の並びを、年ごと（4年以上）・半年ごと（1.5年以上）・四半期ごとに区切る。短すぎる端の区間は隣とまとめる
 export function segmentize(dates) {
@@ -123,14 +133,15 @@ export const GRIDS = {
   fibo: { look: [40, 60, 120], swing: [8, 15], level: [0, 1, 2], target: [0, 1, 2] },
   candle: { pat: [0, 1, 2, 4, 5, 6, 7, 8], hold: [3, 5, 10, 20] },
   chartpat: { pat: [1, 2, 3, 4], width: [3, 5, 8], tol: [2, 3, 5] },
+  rotation: { period: [63, 126, 189, 252], top: [1, 2, 3], th: [0, 2], rebal: [0, 1] },
   hold: {},
 };
-function combos(grid) {
+export function combos(grid) {
   let out = [{}];
   for (const [k, vs] of Object.entries(grid)) out = out.flatMap(o => vs.map(v => ({ ...o, [k]: v })));
   return out;
 }
-function validParams(strategy, p) {
+export function validParams(strategy, p) {
   if (strategy === "sma") return p.short < p.long;
   if (strategy === "rsi") return p.buy < p.sell;
   if (strategy === "macd") return p.fast < p.slow;
