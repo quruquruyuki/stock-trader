@@ -260,6 +260,13 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
       <button class="btn" id="btRun">検証する</button>
       <div class="err" id="btErr" style="margin-bottom:14px"></div>
 
+      <div class="card">
+        <h2>組み合わせを自動で探す</h2>
+        <p class="hint" style="margin:0 0 12px">上の銘柄・期間・資金の設定のまま、すべての戦略 × 相場フィルター（なし＋各条件1つずつ）を一気に試します。期間を前半（7割）と後半（3割）に分け、<b>どちらでも</b>「買って持ち続ける」より効率が良かったものだけを上に並べます。</p>
+        <button class="btn ghost" id="exRun">自動で探す</button>
+        <div id="exOut"></div>
+      </div>
+
       <div id="btOut" class="hidden">
         <div class="card">
           <h2 id="btTitle">結果</h2>

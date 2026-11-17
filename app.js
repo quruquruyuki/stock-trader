@@ -39,7 +39,7 @@ async function call(action, body = {}) {
   return data;
 }
 function busy(btn, on, label) {
-  if (on) { btn.dataset.label = btn.textContent; btn.innerHTML = `<span class="spin"></span>${esc(label || "処理中…")}`; btn.disabled = true; }
+  if (on) { if (!btn.disabled) btn.dataset.label = btn.textContent; btn.innerHTML = `<span class="spin"></span>${esc(label || "処理中…")}`; btn.disabled = true; }
   else { btn.textContent = btn.dataset.label || btn.textContent; btn.disabled = false; }
 }
 function segInit(id, onPick) {
@@ -307,6 +307,78 @@ $("btRun").onclick = async () => {
     $("btOut").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) { $("btErr").textContent = e.message; }
   finally { busy($("btRun"), false); }
+};
+
+/* ---------- 組み合わせを自動で探す ---------- */
+let exRows = [];
+$("exRun").onclick = async () => {
+  const base = readCfg(), out = $("exOut");
+  out.innerHTML = "";
+  if (!base.symbols.length) { out.innerHTML = `<div class="err">先に銘柄を入れてください</div>`; return; }
+  if (base.sizeMode === "risk" && !(base.slPct > 0)) { out.innerHTML = `<div class="err">「損切り幅から逆算」を使うときは、細かい設定で損切り（%）を入れてください</div>`; return; }
+  const m = market, tick = () => new Promise(r => setTimeout(r, 0));
+  busy($("exRun"), true, "データを集めています…");
+  try {
+    const start = period ? isoAgo(Math.round(period * 365.25)) : null;
+    const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null;
+    const { data, errors } = await getBars(m, base.symbols, from);
+    const ok = base.symbols.filter(s => data[s]?.length);
+    if (!ok.length) throw new Error(Object.values(errors)[0] || "株価が取得できませんでした");
+    // 条件に使うデータを全部集める。取れなかったものは、その条件だけ飛ばす
+    const cands = Object.entries(RG_PRESETS).map(([k, P]) => ({ k, P, row: { preset: k, role: P.role, val: P.def(m), market: m } })).map(c => ({ ...c, f: rgFilter(c.row, m) }));
+    const keys = [...new Set([...cands.map(c => c.f.key).filter(Boolean), "IX:" + (m === "JP" ? "NKVI" : "VIX")])];
+    for (const key of keys) {
+      const [km, ks] = key.split(":");
+      try { const v = await getBars(km, [ks], from); if (v.data[ks]?.length) data[key] = v.data[ks]; } catch (_) { /* 飛ばす */ }
+    }
+    const filters = [null, ...cands.filter(c => !c.f.key || data[c.f.key])];
+    const skipped = cands.filter(c => c.f.key && !data[c.f.key]).map(c => c.P.label);
+    // 期間を前半7割・後半3割に分ける
+    const cfg0 = { ...base, symbols: ok, regime: { mode: "off" } };
+    const all = backtest({ ...cfg0, strategy: "hold", params: {} }, data, { from: start });
+    const dates = all.equity.map(e => e.d);
+    if (dates.length < 200) throw new Error("期間が短すぎます。2年以上で試してください");
+    const split = dates[Math.floor(dates.length * 0.7)], first = start || dates[0];
+    const nx = new Date(split + "T00:00:00Z"); nx.setUTCDate(nx.getUTCDate() + 1);
+    const next = nx.toISOString().slice(0, 10);
+    const strategies = Object.keys(STRATEGIES).filter(k => k !== "hold" && (!STRATEGIES[k].needsVol || data["IX:" + (m === "JP" ? "NKVI" : "VIX")]));
+    const rows = [];
+    let bench = null;
+    for (const [si, st] of strategies.entries()) {
+      busy($("exRun"), true, `計算中… ${si + 1}/${strategies.length}`);
+      await tick();
+      const params = Object.fromEntries(STRATEGIES[st].params.map(p => [p.key, p.def]));
+      for (const c of filters) {
+        const cfg = { ...cfg0, strategy: st, params, fearSym: STRATEGIES[st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false,
+          regime: c ? { mode: "auto", action: base.regime.action, filters: [c.f] } : { mode: "off" } };
+        const a = backtest(cfg, data, { from: first, to: split }), b = backtest(cfg, data, { from: next });
+        if (!a.metrics || !b.metrics) continue;
+        bench ||= { a: a.bench.metrics, b: b.bench.metrics };
+        // 前半・後半それぞれで、買い持ちより効率（シャープ）がどれだけ良いか。弱いほうで並べる
+        const ea = a.metrics.sharpe - a.bench.metrics.sharpe, eb = b.metrics.sharpe - b.bench.metrics.sharpe;
+        const enough = a.metrics.roundTrips >= 3 && b.metrics.trades >= 1;
+        rows.push({ st, c, a: a.metrics, b: b.metrics, score: Math.min(ea, eb), pass: enough && ea > 0 && eb > 0, enough });
+      }
+    }
+    exRows = rows.filter(r => r.enough).sort((x, y) => (y.pass - x.pass) || (y.score - x.score)).slice(0, 12);
+    const nPass = rows.filter(r => r.pass).length;
+    const cell = M => `<span class="${cls(M.totalPct)}">${pct(M.totalPct)}</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
+    out.innerHTML = !exRows.length ? `<div class="empty">売買が成立した組み合わせがありませんでした。売買単位や資金を見直してください</div>` : `
+      <div class="swsum">${rows.length}通りを検証。前半 <span class="num">${fmtD(dates[0])}〜${fmtD(split)}</span>／後半 <span class="num">〜${fmtD(dates[dates.length - 1])}</span><br>
+      前半も後半も買い持ちより効率が良かったのは <b>${nPass}通り</b>。${nPass === 0 ? "この銘柄・期間では、買って持ち続けるのが一番でした。下の表は惜しかった順です。" : nPass > rows.length * 0.15 ? "多くの組み合わせが通っています。この期間は下落局面を含んでいて、売買を控える戦略が有利だった可能性があります。" : "数は多くありません。偶然の当たりも混ざるので、★の中から理由に納得できるものを選んでください。"}</div>
+      <div class="tscroll"><table class="t sw"><tr><th>戦略／相場フィルター</th><th>前半</th><th>後半</th></tr>
+      <tr><td class="p mu">買って持ち続けた場合</td><td>${cell(bench.a)}</td><td>${cell(bench.b)}</td></tr>
+      ${exRows.map((r, i) => `<tr class="r" data-i="${i}"><td class="p">${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<br><span class="mu" style="font-size:11px">${r.c ? esc(r.c.P.label) + (r.c.f.role === "only" ? "の時だけ" : "は控える") : "フィルターなし"}</span></td><td>${cell(r.a)}</td><td>${cell(r.b)}</td></tr>`).join("")}
+      </table></div>
+      <p class="hint">各マスは 損益 と 最大下落。★は前半・後半とも、買い持ちより「値動きあたりの効率（シャープ）」が良かったもの。行をタップすると、その組み合わせをフォームに入れて検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
+    out.querySelectorAll("tr.r").forEach(tr => tr.onclick = () => {
+      const r = exRows[Number(tr.dataset.i)];
+      $("btStrategy").value = r.st; renderParams();
+      rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
+      $("btRun").click();
+    });
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { busy($("exRun"), false); }
 };
 
 function renderBT(errText) {
