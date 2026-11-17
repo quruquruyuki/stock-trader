@@ -170,3 +170,49 @@ export function sweep(cfgIn, data, { from = null, split }) {
   }
   return rows.sort((x, y) => y.inS.totalPct - x.inS.totalPct);
 }
+
+/* ---------- 銘柄の性質 ---------- */
+// 日ごとの増減を、2つの系列で同じ日付の区間にそろえる。lag なら外部データは前日までの値（日本株×米国データ）
+export function alignedRets(bars, ext, { lag = false, diff = false, from } = {}) {
+  const xs = [], ys = [];
+  let j = -1;
+  const at = D => { while (j + 1 < ext.length && (lag ? ext[j + 1].d < D : ext[j + 1].d <= D)) j++; return j; };
+  let prevJ = null;
+  for (let i = 0; i < bars.length; i++) {
+    const jj = at(bars[i].d);
+    if (i > 0 && bars[i].d >= from && prevJ != null && prevJ >= 0 && jj > prevJ && bars[i - 1].c > 0) {
+      const a = ext[prevJ].c, b = ext[jj].c;
+      if (diff ? Number.isFinite(a) && Number.isFinite(b) : a > 0 && b > 0) { xs.push(bars[i].c / bars[i - 1].c - 1); ys.push(diff ? b - a : b / a - 1); }
+    }
+    prevJ = jj;
+  }
+  return { xs, ys };
+}
+export function corr(xs, ys) {
+  const n = xs.length; if (n < 60) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; syy += (ys[i] - my) ** 2; }
+  return sxx > 0 && syy > 0 ? { r: sxy / Math.sqrt(sxx * syy), beta: sxy / syy, n } : null;
+}
+// 値動きの性質を計算する（テストしやすいように画面と分けている）
+export function stockProps(bars, ext, { from, usTimed = {} } = {}) {
+  const b = bars.filter(x => x.d >= from || !from);
+  const r = []; for (let i = 1; i < b.length; i++) if (b[i - 1].c > 0) r.push(Math.log(b[i].c / b[i - 1].c));
+  if (r.length < 120) return null;
+  const mean = r.reduce((a, c) => a + c, 0) / r.length, v1 = r.reduce((a, c) => a + (c - mean) ** 2, 0) / (r.length - 1);
+  const vol = Math.sqrt(v1 * 252) * 100;
+  // 1日の自己相関と、10日の分散比（1より大きいと流れが続きやすい＝順張り向き、小さいと戻りやすい＝逆張り向き）
+  let ac = 0; for (let i = 1; i < r.length; i++) ac += (r[i] - mean) * (r[i - 1] - mean); ac /= (r.length - 1) * v1;
+  const q = 10, r10 = []; for (let i = q; i <= r.length; i++) { let s = 0; for (let k = i - q; k < i; k++) s += r[k]; r10.push(s); }
+  const m10 = r10.reduce((a, c) => a + c, 0) / r10.length, v10 = r10.reduce((a, c) => a + (c - m10) ** 2, 0) / (r10.length - 1);
+  const vr = v10 / (q * v1);
+  // 月ごとのクセ（データのある全期間で、月の初めから終わりまでの増減）
+  const lastOf = new Map(); for (const x of bars) lastOf.set(x.d.slice(0, 7), x.c);
+  const ms = [...lastOf.entries()], byM = Array.from({ length: 12 }, () => []);
+  for (let i = 1; i < ms.length; i++) if (ms[i - 1][1] > 0) byM[Number(ms[i][0].slice(5, 7)) - 1].push(ms[i][1] / ms[i - 1][1] - 1);
+  const months = byM.map((a, i) => ({ m: i + 1, n: a.length, avg: a.length ? a.reduce((x, y) => x + y, 0) / a.length * 100 : 0, win: a.length ? a.filter(x => x > 0).length / a.length * 100 : 0 }));
+  const cors = {};
+  for (const [k, e] of Object.entries(ext)) if (e?.length) cors[k] = corr(...Object.values(alignedRets(bars, e, { from, lag: !!usTimed[k], diff: k === "IX:US10Y" })));
+  return { vol, ac, vr, months, cors, days: r.length, from: b[0].d, to: b[b.length - 1].d };
+}

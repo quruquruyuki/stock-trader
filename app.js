@@ -1,6 +1,6 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 import { STRATEGIES, STRATEGY_GROUPS, normalizeCfg, regimeMap, precomputeSignals, technicalRating, toWeekly, ratingLabel } from "./engine.js";
-import { GRIDS, backtest, sweep, segmentize, segReturns, combos, validParams, partMetrics } from "./research.js";
+import { GRIDS, backtest, sweep, segmentize, segReturns, combos, validParams, partMetrics, metrics, stockProps } from "./research.js";
 
 const CFG = window.ST_CONFIG;
 const sb = createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
@@ -356,6 +356,7 @@ $("btRun").onclick = async () => {
     lastBT = { market, cfg: { ...cfg, symbols: ok }, res, data, period, start, sweepRows: null, bname: benchName(market) };
     $("swOut").innerHTML = "";
     renderBT(errText);
+    renderPeerPre(); $("peerOut").innerHTML = ""; $("propOut").innerHTML = "";
     saveForm(); addHist(lastBT);
     $("btOut").classList.remove("hidden");
     $("btOut").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -446,7 +447,13 @@ function renderEx() {
   const out = $("exOut"), S = exState;
   if (!S) return;
   const prio = $("exPrio").querySelector(".on")?.dataset.v || "half";
-  const { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname } = S;
+  const { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname, plan, yrs, trainEnd } = S;
+  const nextDay = d => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
+  const planText = {
+    seal: `<div class="plan seal"><b>封印中</b>：期間が${yrs.toFixed(0)}年あるので、最後の3割（<span class="num">${fmtD(nextDay(trainEnd))}〜${fmtD(dates[dates.length - 1])}</span>）は使わずに並べています。下の「数値を詰める」で選んだ設定だけを、最後に一度、封印した期間で確かめます。</div>`,
+    wf: `<div class="plan wf"><b>ウォークフォワード</b>：期間が${yrs.toFixed(1)}年なので、下の「数値を詰める」では、過去のデータで数値を選んで次の1年で試す、を1年ずつずらして確かめます。</div>`,
+    short: `<div class="plan short"><b>期間が短い</b>：${yrs.toFixed(1)}年分しかないため、ここでの順位は偶然の影響が大きく、数値を詰めても良し悪しを判断できません。米国株など長いデータで試すか、「似た銘柄で確かめる」で他の銘柄でも効くかを見てください。</div>`,
+  }[plan || "wf"];
   const okRows = rows.filter(r => r.enough);
   // ★の条件と並べ方
   const ddRatio = M => M.maxDDPct > 0 ? benchM.maxDDPct * 0.5 / M.maxDDPct : 9;
@@ -496,14 +503,14 @@ function renderEx() {
   }[prio];
   const right = (M, wins) => `${prio === "balance" ? `<b>${wins}/${K}勝</b>` : `<b>${metric(M)}</b>`}<span class="${cls(M.totalPct)}">${pct(M.totalPct)}</span><small>${prio === "dd" ? "" : `-${M.maxDDPct.toFixed(0)}%`}${prio === "balance" ? "" : `${prio === "dd" ? "" : "・"}${wins}/${K}勝`}</small>`;
   out.innerHTML = !exRows.length ? `<div class="empty">売買が成立した組み合わせがありませんでした。売買単位や資金を見直してください</div>` : `
-    <div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(dates[dates.length - 1])}</span>）。並び：<b>${EX_PRIO[prio].hint}</b>。<br>
+    ${planText}<div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(plan === "seal" ? trainEnd : dates[dates.length - 1])}</span>）。並び：<b>${EX_PRIO[prio].hint}</b>。<br>
     ${passText}のは <b>${nPass}通り</b>。${nPass === 0 ? "条件を満たすものはありませんでした。下は惜しかった順です。" : ""}</div>
     <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
     <div class="segrow base"><div class="t"><span>${esc(bname)}を持ち続けた場合</span><span class="num">${prio === "balance" ? "" : `<b>${metric(benchM)}</b>`}<span class="${cls(benchM.totalPct)}">${pct(benchM.totalPct)}</span><small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
     ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(stName(r))}<small>${esc(ruleText(r.c, r.act))}${r.same.length ? `<br>（同じ結果：${esc(r.same.slice(0, 3).map(c => ruleText(c, r.act)).join("、"))}${r.same.length > 3 ? ` ほか${r.same.length - 3}件` : ""}）` : ""}</small></span><span class="num">${right(r.M, r.wins)}</span></div>${strip(r.seg, r.ex)}</div>`).join("")}
-    <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>
+    <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します${plan === "seal" ? "（全期間で検証するので、封印した期間の成績も見えてしまいます。確かめは「数値を詰める」で）" : ""}。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>
     <button class="btn ghost" id="exTune">上位5件の数値を詰める</button>
-    <p class="hint" style="margin-top:6px">上の並びで上から5件（数値のない「買って持ち続ける」は飛ばします）について、戦略の数値（日数や基準）を組み合わせて試します。期間の前半7割で一番良い数値を選び、残り3割で本当に良くなるかを確かめます。</p>
+    <p class="hint" style="margin-top:6px">上の並びで上から5件（数値のない「買って持ち続ける」は飛ばします）について、戦略の数値（日数や基準）を組み合わせて試します。${plan === "seal" ? "前の7割で一番良い数値を選び、封印した最後の3割で一度だけ確かめます。" : plan === "short" ? "期間が短いため、結果は参考程度です。" : "過去のデータで数値を選び、次の1年で試すのを1年ずつずらして繰り返します。"}</p>
     <div id="exTuneOut"></div>`;
   if ($("exTune")) $("exTune").onclick = runTune;
   out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
@@ -542,8 +549,10 @@ async function runTune() {
   // 上から順に、数値を変えられる組み合わせを5つ（買い持ち＋フィルターは数値がないので飛ばす）
   const cands = exAll.filter(r => r.st !== "hold" && GRIDS[r.st] && Object.keys(GRIDS[r.st]).length).slice(0, 5);
   if (!cands.length) { out.innerHTML = `<div class="empty">数値を変えられる組み合わせがありません（買って持ち続けるには数値がありません）</div>`; return; }
-  const { dates, data, maps, cfg0, start, m, benchEq } = S;
-  const split = dates[Math.floor(dates.length * 0.7)], last = dates[dates.length - 1];
+  const { dates, data, maps, cfg0, start, m, benchEq, plan } = S;
+  if (plan === "short") { out.innerHTML = `<div class="plan short">期間が${S.yrs.toFixed(1)}年と短いため、数値を詰めても、良くなったのか偶然なのかを判断できません。期間を3年以上にして試してください（日本株は無料プランで約2年分のため、米国株で試すか「似た銘柄で確かめる」を使ってください）。</div>`; return; }
+  if (plan === "wf") return runWalkForward(cands, prio);
+  const split = S.trainEnd || dates[Math.floor(dates.length * 0.7)], last = dates[dates.length - 1];
   const nx = new Date(split + "T00:00:00Z"); nx.setUTCDate(nx.getUTCDate() + 1);
   const next = nx.toISOString().slice(0, 10);
   const bA = partMetrics(benchEq, [], dates[0], split), bB = partMetrics(benchEq, [], next, last);
@@ -580,19 +589,195 @@ async function runTune() {
   busy($("exTune"), false);
   const cell = M => `<span class="${cls(M.cagrPct)}">${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
   const ruleText = (c, act) => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ持つ" : "は降りる") + (act === "nobuy" ? "（新規だけ止める）" : "");
-  out.innerHTML = `<div class="swsum">前半（調整に使う）<span class="num">${fmtD(dates[0])}〜${fmtD(split)}</span>／後半（確かめ）<span class="num">${fmtD(next)}〜${fmtD(last)}</span>。並べ方「${EX_PRIO[prio].label}」の基準で、前半の成績だけを見て数値を選びました。</div>` +
+  out.innerHTML = `<div class="swsum">選ぶのに使った期間 <span class="num">${fmtD(dates[0])}〜${fmtD(split)}</span>／封印していた確かめの期間 <span class="num">${fmtD(next)}〜${fmtD(last)}</span>。並べ方「${EX_PRIO[prio].label}」の基準で、前の期間の成績だけを見て数値を選びました。確かめの期間は、ここで初めて使っています。</div>` +
     results.map((x, i) => `<div class="tune">
       <div class="t"><b>${esc(STRATEGIES[x.r.st].label)}</b><small>${esc(ruleText(x.r.c, x.r.act))}</small></div>
-      <table class="t sw"><tr><th></th><th>前半 年率<br>下落</th><th>後半 年率<br>下落</th></tr>
+      <table class="t sw"><tr><th></th><th>選ぶ期間 年率<br>下落</th><th>確かめ 年率<br>下落</th></tr>
       <tr><td class="p">探索で使った数値<br><span class="mu" style="font-size:11px">${esc(shortParams(x.r.st, x.base.params))}</span></td><td>${cell(x.base.A)}</td><td>${cell(x.base.B)}</td></tr>
       <tr><td class="p"><b>詰めた数値</b><br><span class="mu" style="font-size:11px">${esc(shortParams(x.r.st, x.best.params))}</span></td><td>${cell(x.best.A)}</td><td>${cell(x.best.B)}</td></tr>
       <tr><td class="p mu">${esc(S.bname)}</td><td>${cell(bA)}</td><td>${cell(bB)}</td></tr></table>
-      <p class="verdict ${x.improved ? "up" : "dn"}">${x.improved ? "後半でも、探索で使った数値より良くなりました。数値を変える意味がありそうです。" : "後半では、探索で使った数値以下でした。前半に合わせすぎた可能性が高く、元の数値のままが無難です。"}<br><span class="mu">試した${x.n}通りのうち、後半で${esc(S.bname)}より良かった（${esc(EX_PRIO[prio].label)}の基準）のは ${x.okShare.toFixed(0)}%。${x.okShare >= 50 ? "数値を多少変えても崩れにくい組み合わせです。" : x.okShare >= 20 ? "数値によって当たり外れがあります。" : "ほとんどの数値で負けています。たまたま良かっただけかもしれません。"}</span></p>
+      <p class="verdict ${x.improved ? "up" : "dn"}">${x.improved ? "封印していた期間でも、探索で使った数値より良くなりました。数値を変える意味がありそうです。" : "封印していた期間では、探索で使った数値以下でした。選ぶ期間に合わせすぎた可能性が高く、元の数値のままが無難です。"}<br><span class="mu">試した${x.n}通りのうち、封印していた期間で${esc(S.bname)}より良かった（${esc(EX_PRIO[prio].label)}の基準）のは ${x.okShare.toFixed(0)}%。${x.okShare >= 50 ? "数値を多少変えても崩れにくい組み合わせです。" : x.okShare >= 20 ? "数値によって当たり外れがあります。" : "ほとんどの数値で負けています。たまたま良かっただけかもしれません。"}</span></p>
       <button class="btn ghost sm" data-tune="${i}">詰めた数値で検証する</button></div>`).join("");
   out.querySelectorAll("[data-tune]").forEach(b => b.onclick = () => {
     const x = results[Number(b.dataset.tune)];
     $("btStrategy").value = x.r.st; renderParams();
     for (const [k, v] of Object.entries(x.best.params)) { const el = $("bp_" + k); if (el) el.value = v; }
+    rgRows = x.r.c ? [{ ...x.r.c.row }] : []; renderRg();
+    if (x.r.c) $("btRgAct").value = x.r.act;
+    $("btRun").click();
+  });
+}
+
+/* ---------- この銘柄の癖を調べる（似た銘柄・性質） ---------- */
+const PEERS = {
+  JP: { "自動車": "7203,7267,7270,7201,7269", "電機": "6758,6501,6702,6752,7751", "銀行": "8306,8316,8411", "商社": "8001,8031,8058,8053,8002", "電力・ガス": "9501,9502,9503,9531", "医薬品": "4502,4503,4568,4519,4523", "食品": "2802,2914,2502,2503" },
+  US: { "ハイテク": "AAPL,MSFT,NVDA,GOOGL,META", "半導体": "NVDA,AMD,AVGO,INTC,QCOM", "金融": "JPM,BAC,WFC,C,GS", "エネルギー": "XOM,CVX,COP,OXY,SLB", "公益": "NEE,DUK,SO,D,AEP", "生活必需品": "PG,KO,PEP,WMT,COST", "ヘルスケア": "JNJ,PFE,MRK,ABBV,LLY", "主要ETF": "SPY,QQQ,IWM,DIA,EFA,EEM" },
+};
+function renderPeerPre() {
+  const m = lastBT?.market || market;
+  $("peerPre").innerHTML = Object.entries(PEERS[m]).map(([k, v]) => `<button class="chipbtn" data-v="${v}">${esc(k)}</button>`).join("");
+  $("peerPre").querySelectorAll("button").forEach(b => b.onclick = () => { $("peerSyms").value = b.dataset.v; });
+}
+// 銘柄の補助データ（指数・ドル円など）を足す。取れなければ足さない
+async function addKey(data, key, from) {
+  if (data[key]) return true;
+  const [km, ks] = key.split(":");
+  try { const v = await getBars(km, [ks], from); if (v.data[ks]?.length) { data[key] = v.data[ks]; return true; } } catch (_) { /* 取れなくても続ける */ }
+  return false;
+}
+$("peerRun").onclick = async () => {
+  const out = $("peerOut");
+  if (!lastBT) return;
+  const { cfg, start, data } = lastBT, m = lastBT.market;
+  if (STRATEGIES[cfg.strategy].multi) { out.innerHTML = `<div class="empty">「${esc(STRATEGIES[cfg.strategy].label)}」は複数の銘柄を入れ替える戦略なので、1銘柄ずつの確かめはできません</div>`; return; }
+  const own = cfg.symbols;
+  const syms = parseSyms($("peerSyms").value).filter(s => !own.includes(s)).slice(0, 10);
+  if (!syms.length) { out.innerHTML = `<div class="err">比べる銘柄を入れてください（いま検証した銘柄以外）</div>`; return; }
+  const prio = $("exPrio").querySelector(".on")?.dataset.v || "half";
+  busy($("peerRun"), true, "似た銘柄で確かめています…");
+  try {
+    const from = start ? isoAgo(Math.round(lastBT.period * 365.25) + 600) : null;
+    const { data: got, errors } = await getBars(m, syms, from);
+    const d2 = { ...data, ...got };
+    const rows = [];
+    for (const s of [...own, ...syms]) {
+      if (!d2[s]?.length) { rows.push({ s, err: errors[s] || "データなし" }); continue; }
+      const r = backtest({ ...cfg, symbols: [s] }, d2, { from: start });
+      if (!r.metrics || !r.bench?.metrics) { rows.push({ s, err: "期間のデータが足りません" }); continue; }
+      rows.push({ s, own: own.includes(s), M: r.metrics, B: r.bench.metrics, ok: prioBeats(prio, r.metrics, r.bench.metrics), years: (Date.parse(r.equity[r.equity.length - 1].d) - Date.parse(r.equity[0].d)) / 864e5 / 365.25 });
+    }
+    const peers = rows.filter(r => !r.own && r.M), n = peers.length, k = peers.filter(r => r.ok).length;
+    const cell = M => `<span class="${cls(M.cagrPct)}">${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
+    const verdict = !n ? "" : k / n >= 0.6 ? `似た銘柄の<b>${k}/${n}銘柄</b>で効きました。この種類の銘柄に共通する癖をとらえている可能性があります。` : k / n >= 0.3 ? `似た銘柄では<b>${k}/${n}銘柄</b>で効きました。効く銘柄と効かない銘柄があり、銘柄ごとの差が大きいです。` : `似た銘柄では<b>${k}/${n}銘柄</b>しか効きませんでした。元の銘柄での好成績は、たまたまの可能性が高いです。`;
+    out.innerHTML = `<p class="verdict ${n && k / n >= 0.6 ? "up" : "dn"}" style="margin-top:12px">${verdict}<br><span class="mu">基準：並べ方「${esc(EX_PRIO[prio].label)}」で、各銘柄の買い持ちより良いか。</span></p>
+      <div class="tscroll"><table class="t sw"><tr><th>銘柄</th><th>この戦略<br>年率・下落</th><th>買い持ち<br>年率・下落</th><th></th></tr>${rows.map(r => r.err ? `<tr><td class="p">${esc(symLabel(m, r.s))}</td><td colspan="3" class="mu" style="font-size:12px">${esc(r.err)}</td></tr>` : `<tr><td class="p">${esc(symLabel(m, r.s))}${r.own ? `<br><span class="mu" style="font-size:11px">検証した銘柄</span>` : ""}${r.years < 3 ? `<br><span class="mu" style="font-size:11px">${r.years.toFixed(1)}年分</span>` : ""}</td><td>${cell(r.M)}</td><td>${cell(r.B)}</td><td class="${r.ok ? "up" : "dn"}">${r.ok ? "効いた" : "—"}</td></tr>`).join("")}</table></div>`;
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { busy($("peerRun"), false); }
+};
+
+const EXT_NAMES = { IDX: "指数", "IX:USDJPY": "ドル円（円安で＋）", "IX:WTI": "原油（WTI）", "US:GLD": "金（GLD）", "IX:US10Y": "米10年金利" };
+$("propRun").onclick = async () => {
+  const out = $("propOut");
+  if (!lastBT) return;
+  const m = lastBT.market, syms = lastBT.cfg.symbols.slice(0, 3), from = isoAgo(Math.round(3 * 365.25)), longFrom = isoAgo(365 * 12);
+  busy($("propRun"), true, "性質を調べています…");
+  try {
+    const { data: bd } = await getBars(m, syms, longFrom); // 月ごとのクセは長いほうがよいので12年分
+    const idxKey = m === "JP" ? "JP:1306" : "US:SPY", ext = {}, usTimed = {};
+    for (const k of [idxKey, "IX:USDJPY", "IX:WTI", "US:GLD", "IX:US10Y"]) {
+      const d = {}; if (await addKey(d, k, from)) ext[k === idxKey ? "IDX" : k] = d[k];
+      if (m === "JP" && k !== idxKey) usTimed[k === idxKey ? "IDX" : k] = true;
+    }
+    const blocks = [];
+    for (const s of syms) {
+      const bars = bd[s] || lastBT.data[s];
+      const own = { ...ext }; if (s === idxKey.split(":")[1] && idxKey.startsWith(m)) delete own.IDX; // 指数そのものなら比べない
+      const P = bars?.length ? stockProps(bars, own, { from, usTimed }) : null;
+      if (!P) { blocks.push(`<div class="prop"><b>${esc(symLabel(m, s))}</b><div class="mu">データが足りません（半年以上必要）</div></div>`); continue; }
+      const bar = v => { const w = Math.min(100, Math.abs(v) * 100); return `<span class="bar" style="width:${w * 0.8}px;background:var(--${v >= 0 ? "up" : "dn"})"></span><span class="num">${v >= 0 ? "+" : ""}${v.toFixed(2)}</span>`; };
+      const corRows = Object.entries(P.cors).filter(([, c]) => c).map(([k, c]) => `<span>${esc(k === "IDX" ? (m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）") : EXT_NAMES[k])}</span><span>${bar(c.r)}${k === "IDX" ? `<span class="mu" style="font-size:11px">　β ${c.beta.toFixed(2)}</span>` : ""}</span>`).join("");
+      const style = P.vr > 1.1 || P.ac > 0.05 ? "順張り向き（上がり始めると続きやすい）" : P.vr < 0.9 || P.ac < -0.05 ? "逆張り向き（行き過ぎると戻りやすい）" : "どちらとも言えない（ほぼランダムな動き）";
+      const ms = P.months.filter(x => x.n >= 3), top = [...ms].sort((a, b) => b.avg - a.avg);
+      const mtxt = x => `${x.m}月 <span class="num ${cls(x.avg)}">${x.avg >= 0 ? "+" : ""}${x.avg.toFixed(1)}%</span><span class="mu" style="font-size:11px">（上昇${x.win.toFixed(0)}%・${x.n}年）</span>`;
+      const tips = [];
+      const c = k => P.cors[k]?.r ?? 0;
+      if (c("IDX") >= 0.7) tips.push("指数との連動が強く、銘柄独自の癖は出にくいです。指数を見る相場フィルター（指数の移動平均など）が効きやすいです。");
+      else if (P.cors.IDX && c("IDX") < 0.4) tips.push("指数との連動が弱く、銘柄独自の動きが大きいです。癖を探す余地があります。");
+      if (Math.abs(c("IX:USDJPY")) >= 0.3) tips.push(`ドル円と${c("IX:USDJPY") > 0 ? "同じ向き（円安で上がる）" : "逆向き（円高で上がる）"}に動きやすいです。相場フィルターの「ドル円」を試す価値があります。`);
+      if (Math.abs(c("IX:WTI")) >= 0.3) tips.push(`原油と${c("IX:WTI") > 0 ? "同じ向き" : "逆向き"}に動きやすいです。相場フィルターの「原油」を試す価値があります。`);
+      if (Math.abs(c("IX:US10Y")) >= 0.25) tips.push(`金利が${c("IX:US10Y") > 0 ? "上がると上がり" : "上がると下がり"}やすいです。「米10年金利」のフィルターを試す価値があります。`);
+      if (P.vr > 1.1 || P.ac > 0.05) tips.push("流れが続きやすいので、移動平均・ブレイクアウトなど順張りの戦略が合いやすいです。");
+      if (P.vr < 0.9 || P.ac < -0.05) tips.push("戻りやすいので、RSI・ボリンジャーなど逆張りの戦略が合いやすいです。");
+      if (top.length >= 6 && top[0].n >= 8 && top[0].avg - top[top.length - 1].avg >= 4 && top[0].win >= 70) tips.push(`${top[0].m}月が強めです。ただし年数が少ないと偶然の差も大きいので、「季節」のフィルターは他の銘柄でも同じ傾向があるか確かめてから使ってください。`);
+      blocks.push(`<div class="prop"><b>${esc(symLabel(m, s))}</b> <span class="mu num" style="font-size:12px">${fmtD(P.from)}〜${fmtD(P.to)}</span>
+        <div class="kv"><span>値動きの大きさ</span><span><b class="num">年${P.vol.toFixed(0)}%</b> <span class="mu" style="font-size:12px">${P.vol >= 40 ? "（とても大きい）" : P.vol >= 25 ? "（大きめ）" : P.vol >= 15 ? "（ふつう）" : "（小さい）"}</span></span>
+        <span>動きの癖</span><span>${style}<br><span class="mu num" style="font-size:11px">分散比(10日) ${P.vr.toFixed(2)}・1日の自己相関 ${P.ac >= 0 ? "+" : ""}${P.ac.toFixed(2)}</span></span>
+        ${corRows ? `<span style="grid-column:1/-1;color:var(--ink);margin-top:4px">日々の値動きの連動（−1〜+1）${m === "JP" ? `<span class="mu" style="font-size:11px">　米国の値は前日分と比べています</span>` : ""}</span>${corRows}` : ""}
+        ${top.length >= 4 ? `<span>強い月</span><span>${top.slice(0, 2).map(mtxt).join("<br>")}</span><span>弱い月</span><span>${top.slice(-2).reverse().map(mtxt).join("<br>")}</span>` : ""}</div>
+        ${tips.length ? `<div class="hint">${tips.map(t => "・" + esc(t)).join("<br>")}</div>` : ""}</div>`);
+    }
+    out.innerHTML = blocks.join("") + `<p class="hint" style="margin-top:10px">連動は直近3年の日々の値動き、月ごとのクセは最大12年分で計算しています。連動0.3以上で「ある程度連動」、0.7以上で「強く連動」が目安です。</p>`;
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { busy($("propRun"), false); }
+};
+
+/* ---------- ウォークフォワード（過去で選び、次の1年で試すのを繰り返す） ---------- */
+// 資産の推移から、from〜to の日ごとの増減率を取り出す（前日の資産からの変化）
+function dailyRets(eq, from, to) {
+  const out = [];
+  for (let i = 1; i < eq.length; i++) if (eq[i].d >= from && eq[i].d <= to && eq[i - 1].equity > 0) out.push({ d: eq[i].d, r: eq[i].equity / eq[i - 1].equity - 1 });
+  return out;
+}
+// 日ごとの増減率をつないで、1本の資産の推移にする
+const chain = (rets, start = 1e6) => { let v = start; return rets.map(x => ({ d: x.d, equity: (v *= 1 + x.r) })); };
+async function runWalkForward(cands, prio) {
+  const S = exState, out = $("exTuneOut");
+  const { dates, data, maps, cfg0, start, m, benchEq } = S;
+  const years = [...new Set(dates.map(d => d.slice(0, 4)))];
+  // 最初の2年は選ぶためだけに使い、3年目から1年ずつ試す（最後の年は途中まででもよい）
+  const first = dates[0], testYears = years.filter(y => (Date.parse(y + "-01-01") - Date.parse(first)) / 864e5 >= 365 * 2 - 10);
+  if (!testYears.length) { out.innerHTML = `<div class="err">試せる年がありません</div>`; return; }
+  const yEnd = y => `${y}-12-31`, yStart = y => `${y}-01-01`, prevEnd = y => `${Number(y) - 1}-12-31`;
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  busy($("exTune"), true, "ウォークフォワードで確かめています…");
+  const results = [];
+  try {
+    for (const [ci, r] of cands.entries()) {
+      busy($("exTune"), true, `ウォークフォワードで確かめています… ${ci + 1}/${cands.length}`);
+      await tick();
+      const regime = r.c ? { mode: "auto", action: r.act, filters: [r.c.f] } : { mode: "off" };
+      const runs = [];
+      const base = { ...r.params };
+      for (const p of [{}, ...combos(GRIDS[r.st])]) {
+        const params = { ...base, ...p };
+        if (!validParams(r.st, params)) continue;
+        const cfg = { ...cfg0, strategy: r.st, params, fearSym: STRATEGIES[r.st].needsVol ? (m === "JP" ? "NKVI" : "VIX") : "", fearLag: false, regime };
+        const res = backtest(cfg, data, { from: start, sig: precomputeSignals(cfg, data), bearMap: r.c ? maps.get(r.c) : undefined, noBench: true });
+        if (res.metrics) runs.push({ params: normalizeCfg(cfg).params, eq: res.equity, trades: res.trades, isBase: !Object.keys(p).length });
+      }
+      const baseRun = runs.find(x => x.isBase);
+      if (!baseRun || runs.length < 2) continue;
+      const picks = [], wf = [], df = [], bh = [];
+      for (const y of testYears) {
+        // その年より前のデータだけで一番良い数値を選ぶ
+        const B = partMetrics(benchEq, [], first, prevEnd(y));
+        let best = null, bestK = null;
+        for (const x of runs) {
+          const A = partMetrics(x.eq, x.trades, first, prevEnd(y));
+          if (!A || !B || A.trades === 0) continue;
+          const k = prioScore(prio, A, B);
+          if (!best || better(k, bestK) > 0) { best = x; bestK = k; }
+        }
+        best = best || baseRun;
+        picks.push({ y, params: best.params });
+        wf.push(...dailyRets(best.eq, yStart(y), yEnd(y)));
+        df.push(...dailyRets(baseRun.eq, yStart(y), yEnd(y)));
+        bh.push(...dailyRets(benchEq, yStart(y), yEnd(y)));
+      }
+      const mW = metrics(chain(wf), [], 1e6), mD = metrics(chain(df), [], 1e6), mB = metrics(chain(bh), [], 1e6);
+      if (!mW || !mD || !mB) continue;
+      const kinds = new Set(picks.map(p => JSON.stringify(p.params))).size;
+      results.push({ r, picks, mW, mD, mB, kinds, beatsBench: prioBeats(prio, mW, mB), beatsBase: better(prioScore(prio, mW, mB), prioScore(prio, mD, mB)) > 0 });
+    }
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; busy($("exTune"), false); return; }
+  busy($("exTune"), false);
+  const cell = M => `<span class="${cls(M.cagrPct)}">${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%</span><br><span class="mu" style="font-size:11px">-${M.maxDDPct.toFixed(0)}%</span>`;
+  const ruleText = (c, act) => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ持つ" : "は降りる") + (act === "nobuy" ? "（新規だけ止める）" : "");
+  out.innerHTML = `<div class="swsum">試した年：<b>${testYears[0]}〜${testYears[testYears.length - 1]}年</b>（${testYears.length}年）。毎年、その前までのデータだけで並べ方「${EX_PRIO[prio].label}」の基準の一番良い数値を選び、その1年だけ使った成績をつないでいます。実際に毎年数値を見直しながら運用した場合に近い確かめ方です。</div>` +
+    results.map((x, i) => `<div class="tune">
+      <div class="t"><b>${esc(STRATEGIES[x.r.st].label)}</b><small>${esc(ruleText(x.r.c, x.r.act))}</small></div>
+      <table class="t sw"><tr><th></th><th>試した年の<br>年率・下落</th></tr>
+      <tr><td class="p"><b>毎年選び直した場合</b></td><td>${cell(x.mW)}</td></tr>
+      <tr><td class="p">探索の数値のまま<br><span class="mu" style="font-size:11px">${esc(shortParams(x.r.st, x.picks.length ? x.r.params : {}))}</span></td><td>${cell(x.mD)}</td></tr>
+      <tr><td class="p mu">${esc(S.bname)}</td><td>${cell(x.mB)}</td></tr></table>
+      <p class="verdict ${x.beatsBench ? "up" : "dn"}">${x.beatsBench ? `毎年選び直しても、${esc(S.bname)}より良い成績でした（${esc(EX_PRIO[prio].label)}の基準）。` : `毎年選び直した場合、${esc(S.bname)}には届きませんでした（${esc(EX_PRIO[prio].label)}の基準）。`}${x.beatsBase ? "数値を見直すほうが、探索の数値のままより良くなりました。" : "数値を見直しても、探索の数値のままより良くはなりませんでした。数値は固定のほうが無難です。"}<br>
+      <span class="mu">選ばれた数値は${x.picks.length}年で${x.kinds}種類。${x.kinds <= Math.max(2, x.picks.length / 3) ? "毎年ほぼ同じ数値が選ばれていて、安定しています。" : "年によって選ばれる数値がよく変わり、不安定です。"}</span></p>
+      <details class="more"><summary>年ごとに選ばれた数値</summary><div class="body">${x.picks.map(p => `<div class="mu" style="font-size:12px">${p.y}年：${esc(shortParams(x.r.st, p.params))}</div>`).join("")}</div></details>
+      <button class="btn ghost sm" data-wf="${i}">最新の年に選ばれた数値で検証する</button></div>`).join("");
+  out.querySelectorAll("[data-wf]").forEach(b => b.onclick = () => {
+    const x = results[Number(b.dataset.wf)], p = x.picks[x.picks.length - 1].params;
+    $("btStrategy").value = x.r.st; renderParams();
+    for (const [k, v] of Object.entries(p)) { const el = $("bp_" + k); if (el) el.value = v; }
     rgRows = x.r.c ? [{ ...x.r.c.row }] : []; renderRg();
     if (x.r.c) $("btRgAct").value = x.r.act;
     $("btRun").click();
@@ -629,8 +814,13 @@ $("exRun").onclick = async () => {
     const benchRun = backtest({ ...cfg0, strategy: "hold", params: {} }, data, { from: start, benchSym: benchKey(m) });
     const dates = benchRun.bench.equity.map(e => e.d);
     if (dates.length < 120) throw new Error("期間が短すぎます。1年以上で試してください");
-    const { unit, segs } = segmentize(dates);
-    const benchSeg = segReturns(benchRun.bench.equity, segs, base.initialCash), benchM = benchRun.bench.metrics;
+    // 期間の長さで確かめ方を決める。8年以上：最後の3割を封印（並べるのは前の7割だけで）／3〜8年：ウォークフォワード／3年未満：判断できない
+    const yrs = (Date.parse(dates[dates.length - 1]) - Date.parse(dates[0])) / 864e5 / 365.25;
+    const plan = yrs >= 8 ? "seal" : yrs >= 3 ? "wf" : "short";
+    const trainEnd = plan === "seal" ? dates[Math.floor(dates.length * 0.7)] : dates[dates.length - 1];
+    const { unit, segs } = segmentize(dates.filter(d => d <= trainEnd));
+    const benchSeg = segReturns(benchRun.bench.equity, segs, base.initialCash);
+    const benchM = plan === "seal" ? partMetrics(benchRun.bench.equity, [], dates[0], trainEnd) : benchRun.bench.metrics;
     const K = segs.length, need = Math.max(2, Math.ceil(K * 0.6));
     // 試す戦略：各戦略の初期値と、主な戦略の「長め」の設定。買い持ち＋フィルターも入れる
     const variants = [];
@@ -660,16 +850,18 @@ $("exRun").onclick = async () => {
           const cfg = { ...cfgS, regime: c ? { mode: "auto", action: act, filters: [c.f] } : { mode: "off" } };
           const r = backtest(cfg, data, { from: start, sig, bearMap: c ? maps.get(c) : undefined, noBench: true });
           if (!r.metrics || r.equity.length < dates.length * 0.9) continue;
+          const M = plan === "seal" ? partMetrics(r.equity, r.trades, dates[0], trainEnd) : r.metrics; // 封印中は前の7割だけで評価
+          if (!M) continue;
           const seg = segReturns(r.equity, segs, base.initialCash);
           const ex = seg.map((x, i) => x == null || benchSeg[i] == null ? null : x - benchSeg[i]);
           const wins = ex.filter(x => x != null && x > 0.5).length; // 0.5ポイント以内の差は引き分け
           const sorted = ex.filter(x => x != null).sort((x, y) => x - y), median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
-          const enough = v.st === "hold" ? r.metrics.trades >= 1 : r.metrics.roundTrips >= 3;
-          rows.push({ st: v.st, params: v.params, alt: v.alt, act, c, M: r.metrics, seg, ex, wins, median, enough });
+          const enough = v.st === "hold" ? M.trades >= 1 : M.roundTrips >= 3;
+          rows.push({ st: v.st, params: v.params, alt: v.alt, act, c, M, seg, ex, wins, median, enough });
         }
       }
     }
-    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname: benchName(m), data, maps, cfg0, start, m, benchEq: benchRun.bench.equity };
+    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates, bname: benchName(m), data, maps, cfg0, start, m, benchEq: benchRun.bench.equity, plan, yrs, trainEnd };
     renderEx();
   } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   finally { busy($("exRun"), false); }

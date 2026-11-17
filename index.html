@@ -117,6 +117,13 @@ a.ext b{display:block;font-size:15px;color:var(--acc)} a.ext span{font-size:12px
 .lv.calm{background:#e3f1ea;color:var(--up)} .lv.warn{background:#fbf1dc;color:var(--warn)} .lv.hot{background:#fbe9e6;color:var(--dn)}
 .seg.wrap{flex-wrap:wrap;height:auto}
 .seg.wrap button{flex:1 1 30%}
+h3.sub{font-size:14px;margin:6px 0 6px}
+.prop{border-top:1px solid var(--line);padding:12px 0 4px;margin-top:12px}
+.prop .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin:8px 0}
+.prop .kv span:nth-child(odd){color:var(--mu)}
+.bar{display:inline-block;height:8px;border-radius:4px;vertical-align:middle;margin-right:6px}
+.plan{font-size:13px;line-height:1.6;border-radius:10px;padding:10px 12px;margin:12px 0 0}
+.plan.seal{background:rgba(74,126,232,.10)} .plan.wf{background:rgba(52,140,90,.10)} .plan.short{background:rgba(200,70,60,.10)}
 .tune{border-top:1px solid var(--line);padding:12px 0}
 .tune .t{font-size:14px;line-height:1.4;margin-bottom:6px}
 .tune .t small{display:block;color:var(--mu);font-size:11px}
@@ -348,6 +355,19 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <p class="hint" style="margin:0 0 12px">いろいろな数値の組み合わせを一気に試します。期間を前半（7割）と後半（3割）に分け、前半で成績の良かった組み合わせが、後半でも通用するかを確かめます。前半だけ良いものは「過去に合わせすぎ」の可能性が高いです。</p>
           <button class="btn ghost" id="swRun">総当たりで比べる</button>
           <div id="swOut"></div>
+        </div>
+        <div class="card" id="quirkCard">
+          <h2>この銘柄の癖を調べる</h2>
+          <h3 class="sub">似た銘柄で確かめる</h3>
+          <p class="hint" style="margin:0 0 10px">いま検証した戦略と設定を、似た銘柄に1つずつ当て、それぞれの買い持ちと比べます。多くの銘柄で効けば、偶然ではなく「その種類の銘柄の癖」をとらえている可能性が高まります。1銘柄だけで効く場合は、たまたまの可能性が高いです。</p>
+          <div class="chips" id="peerPre" style="margin-bottom:4px"></div>
+          <input id="peerSyms" class="in" style="margin-top:8px" autocapitalize="characters" placeholder="比べる銘柄（カンマ区切り・10銘柄まで）" autocomplete="off">
+          <button class="btn ghost" id="peerRun" style="margin-top:8px">似た銘柄で確かめる</button>
+          <div id="peerOut"></div>
+          <h3 class="sub" style="margin-top:18px">銘柄の性質</h3>
+          <p class="hint" style="margin:0 0 10px">直近3年ほどの日々の値動きから、値動きの大きさ、指数・ドル円・原油・金・金利との連動、順張りと逆張りのどちらに向くか、月ごとのクセを調べます（3銘柄まで）。</p>
+          <button class="btn ghost" id="propRun">性質を調べる</button>
+          <div id="propOut"></div>
         </div>
         <div class="card">
           <h2>取引の一覧 <span class="mu num" id="btTradeCount" style="font-size:12px;font-weight:400"></span></h2>
