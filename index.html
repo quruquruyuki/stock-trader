@@ -56,6 +56,13 @@ details.more summary::-webkit-details-marker{display:none}
 details.more summary::before{content:"＋ "}
 details.more[open] summary::before{content:"－ "}
 details.more .body{margin-top:12px}
+details.more.flat{border-top:0;margin-top:0;padding-top:0}
+.stepn{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:var(--bg,#fff);font-size:11px;margin-right:8px;vertical-align:2px;font-family:var(--num,inherit)}
+.rgrow{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.rgrow .t{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;font-size:14px;font-weight:600;margin-bottom:8px}
+.rgrow .t small{display:block;font-weight:400;color:var(--mu);font-size:12px;margin-top:2px;line-height:1.5}
+.rgrow .x{border:0;background:none;color:var(--mu);font-size:20px;line-height:1;padding:2px 6px;cursor:pointer}
+.rgrow .g{display:grid;grid-template-columns:1.5fr 1fr;gap:8px;align-items:end}
 .btn{display:block;width:100%;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;background:var(--ink);color:#fff}
 .btn:disabled{opacity:.45}
 .btn.acc{background:var(--acc)}
@@ -165,7 +172,7 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
     <!-- 検証（バックテスト） -->
     <div id="vBT">
       <div class="card">
-        <h2>戦略を過去のデータで試す</h2>
+        <h2><span class="stepn">1</span>銘柄と期間</h2>
         <div class="row">
           <div class="seg" id="btMarket"><button data-v="JP" class="on">日本株</button><button data-v="US">米国株</button></div>
         </div>
@@ -174,13 +181,16 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <input id="btSymbols" class="in" placeholder="7203, 6758" autocapitalize="characters" autocomplete="off">
           <p class="hint" id="btSymHint">4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）</p>
         </div>
-        <div class="row">
+        <div class="row" style="margin-bottom:0">
           <span class="lab">期間</span>
           <div class="seg" id="btPeriod"><button data-v="1">1年</button><button data-v="2" class="on">2年</button><button data-v="5">5年</button><button data-v="10">10年</button><button data-v="0">全部</button></div>
         </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="stepn">2</span>戦略 <span class="mu" style="font-size:12px;font-weight:400">いつ買って、いつ売るか</span></h2>
         <div class="row">
-          <label class="lab" for="btStrategy">戦略</label>
-          <select id="btStrategy" class="in"></select>
+          <select id="btStrategy" class="in" aria-label="戦略"></select>
           <p class="hint" id="btDesc"></p>
         </div>
         <div class="row grid3" id="btParams"></div>
@@ -188,31 +198,22 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
           <label class="lab" for="btFearSym">見る恐怖指数</label>
           <select id="btFearSym" class="in"><option value="NKVI">日経平均VI</option><option value="VIX">VIX（米国）</option></select>
         </div>
-        <div class="row">
-          <label class="lab" for="btRgMode">相場フィルター（市況で売買を切り替える）</label>
-          <select id="btRgMode" class="in"><option value="off">使わない</option><option value="auto">指数で自動判定する</option></select>
+      </div>
+
+      <div class="card">
+        <h2><span class="stepn">3</span>相場フィルター <span class="mu" style="font-size:12px;font-weight:400">市況で売買を切り替える</span></h2>
+        <div id="rgList"></div>
+        <select id="rgAdd" class="in" aria-label="条件を追加"></select>
+        <div id="rgActBox" class="hidden" style="margin-top:14px">
+          <label class="lab" for="btRgAct">「弱気」の日の動き</label>
+          <select id="btRgAct" class="in"><option value="nobuy">新しく買わない（持ち株はそのまま）</option><option value="exit">持ち株も売って待つ</option><option value="half">買う量を半分にする</option></select>
         </div>
-        <div id="btRgBox" class="hidden">
-          <div class="row">
-            <label class="lab" for="btRgRule">弱気の判定方法</label>
-            <select id="btRgRule" class="in"><option value="ma">指数の移動平均</option><option value="vol">恐怖指数（VIX・日経VI）</option><option value="either">どちらかが弱気なら弱気</option></select>
-          </div>
-          <div class="row grid2 hidden" id="btRgVolBox">
-            <div><label class="lab" for="btRgVolSym">恐怖指数</label><select id="btRgVolSym" class="in"><option value="NKVI">日経平均VI</option><option value="VIX">VIX（米国）</option></select></div>
-            <div><label class="lab" for="btRgVolTh">この値を超えたら弱気</label><input id="btRgVolTh" class="in num" inputmode="decimal" value="30"></div>
-          </div>
-          <div class="row grid2" id="btRgMaBox">
-            <div><label class="lab" for="btRgSym">指数（ETF）</label><input id="btRgSym" class="in" autocapitalize="characters" autocomplete="off"></div>
-            <div><label class="lab" for="btRgMa">移動平均（日）</label><input id="btRgMa" class="in num" inputmode="numeric" value="200"></div>
-          </div>
-          <div class="row">
-            <label class="lab" for="btRgAct">弱気のときの動き</label>
-            <select id="btRgAct" class="in"><option value="nobuy">新しく買わない（持ち株はそのまま）</option><option value="exit">持ち株も売って待つ</option><option value="half">買う量を半分にする</option></select>
-            <p class="hint" id="btRgHint"></p>
-          </div>
-        </div>
-        <details class="more">
-          <summary>細かい設定</summary>
+        <p class="hint" id="rgHint"></p>
+      </div>
+
+      <div class="card">
+        <details class="more flat">
+          <summary>細かい設定（資金・損切り・空売り・手数料）</summary>
           <div class="body">
             <div class="row grid2">
               <div><label class="lab" for="btCash" id="btCashLab">初期資金（円）</label><input id="btCash" class="in num" inputmode="numeric"></div>
@@ -226,7 +227,7 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
               <div><label class="lab" for="btSide">売買の向き</label><select id="btSide" class="in"><option value="long">買い（通常）</option><option value="short">空売り（下がると利益）</option></select></div>
               <div><label class="lab" for="btBorrow">貸株料など（年率%）</label><input id="btBorrow" class="in num" inputmode="decimal" value="1"></div>
             </div>
-            <p class="hint" style="margin:-6px 0 14px">空売りは、シグナルが出たら売りで入り、消えたら買い戻します。相場フィルターを使うと「弱気のときだけ仕掛ける」になります。逆日歩や売り禁などは計算に入っていません。</p>
+            <p class="hint" style="margin:-6px 0 14px">空売りは、シグナルが出たら売りで入り、消えたら買い戻します。相場フィルターを使うと、「弱気」の日だけ仕掛けます。逆日歩や売り禁などは計算に入っていません。</p>
             <div class="row">
               <label class="lab" for="btTrend">トレンド条件：終値が何日線より上のときだけ持つ（0でなし）</label>
               <input id="btTrend" class="in num" inputmode="numeric" value="0" placeholder="例：200">
@@ -239,9 +240,10 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
             <p class="hint">終値でシグナルを判定し、翌営業日の始値で約定する前提です。「滑り」は約定値が不利にずれる分の見込みです。複数銘柄のときは資金を銘柄数で等分します。</p>
           </div>
         </details>
-        <div style="margin-top:16px"><button class="btn" id="btRun">検証する</button></div>
-        <div class="err" id="btErr"></div>
       </div>
+
+      <button class="btn" id="btRun">検証する</button>
+      <div class="err" id="btErr" style="margin-bottom:14px"></div>
 
       <div id="btOut" class="hidden">
         <div class="card">

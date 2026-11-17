@@ -131,12 +131,16 @@ export const DEFAULT_CFG = {
   fearSym: "",         // 恐怖指数を使う戦略で見る指数（VIX / NKVI）
   fearLag: false,      // 日本株で VIX を見るとき、前日までの値で判定する
   trendMa: 0,          // トレンド条件：終値がこの日数の移動平均より上のときだけ持つ（0=使わない）
-  // 相場フィルター（市況）。mode: off=使わない / auto=指数で判定 / bull=強気で固定 / bear=弱気で固定
-  // auto は「指数（symbol）の終値が ma 日移動平均以下」のとき弱気。action は弱気のときの動き:
-  //   nobuy=新しく買わない / exit=持ち株も売って待つ / half=買う量を半分にする
-  // rule は弱気の判定方法: ma=指数の移動平均 / vol=恐怖指数（volSym が volTh を超えたら弱気）/ either=どちらかが弱気なら弱気
-  // volSym: VIX（米国）/ NKVI（日経平均VI）。volLag: 日本株で VIX を使うとき、前日までの値で判定する
-  regime: { mode: "off", symbol: "", ma: 200, action: "nobuy", rule: "ma", volSym: "", volTh: 25, volLag: false },
+  // 相場フィルター（市況）。mode: off=使わない / auto=下の条件で判定 / bull=強気で固定 / bear=弱気で固定
+  // action は弱気のときの動き: nobuy=新しく買わない / exit=持ち株も売って待つ / half=買う量を半分にする
+  // filters は条件の並び。1つでも「弱気」と判定したら、その日は弱気。各条件:
+  //   kind: trend（key の終値が ma 日線より cond=above 上 / below 下）
+  //         level（key の値が th より op=gt 上 / lt 下）
+  //         rate （key の値が days 日前より th 以上 dir=up 上がった / down 下がった）
+  //   key : データの名前 "JP:1306" "US:GLD" "IX:VIX" "IX:FF" など
+  //   role: avoid=当てはまる日は弱気 / only=当てはまらない日は弱気（＝当てはまる日だけ売買）
+  //   lag : 日本株で米国のデータを見るとき、前日までの値で判定する
+  regime: { mode: "off", action: "nobuy", filters: [] },
 };
 
 export function normalizeCfg(c) {
@@ -171,15 +175,20 @@ export function normalizeCfg(c) {
     trendMa: Math.round(num(cfg.trendMa, 0, 400, 0)),
     regime: {
       mode: ["auto", "bull", "bear"].includes(cfg.regime?.mode) ? cfg.regime.mode : "off",
-      symbol: String(cfg.regime?.symbol ?? "").trim().toUpperCase().slice(0, 10),
-      ma: Math.round(num(cfg.regime?.ma, 5, 400, 200)),
       action: ["exit", "half"].includes(cfg.regime?.action) ? cfg.regime.action : "nobuy",
-      rule: ["vol", "either"].includes(cfg.regime?.rule) ? cfg.regime.rule : "ma",
-      volSym: ["VIX", "NKVI"].includes(cfg.regime?.volSym) ? cfg.regime.volSym : "",
-      volTh: num(cfg.regime?.volTh, 5, 100, 25),
-      volLag: !!cfg.regime?.volLag,
+      filters: (Array.isArray(cfg.regime?.filters) ? cfg.regime.filters : []).map(f => normalizeFilter(f, num)).filter(Boolean).slice(0, 8),
     },
   };
+}
+
+function normalizeFilter(f, num) {
+  const key = String(f?.key ?? "").trim().toUpperCase();
+  if (!/^(JP|US|IX):[A-Z0-9.\-]{1,10}$/.test(key)) return null;
+  const base = { key, role: f.role === "only" ? "only" : "avoid", lag: !!f.lag };
+  if (f.kind === "trend") return { kind: "trend", ...base, ma: Math.round(num(f.ma, 5, 400, 200)), cond: f.cond === "above" ? "above" : "below" };
+  if (f.kind === "level") return { kind: "level", ...base, op: f.op === "lt" ? "lt" : "gt", th: num(f.th, 0, 1000, 25) };
+  if (f.kind === "rate") return { kind: "rate", ...base, dir: f.dir === "down" ? "down" : "up", days: Math.round(num(f.days, 20, 750, 180)), th: num(f.th, 0, 10, 0.25) };
+  return null;
 }
 
 /* ---------- 指標 ---------- */
@@ -364,13 +373,27 @@ export function runDays(cfgIn, stateIn, data, opts = {}) {
   const rg = cfg.regime;
   let bearOn = () => rg.mode === "bear";
   if (rg.mode === "auto") {
-    // その日までに分かっている最後の値で判定する（strict なら前日まで）
-    const lookup = (bars, test, strict) => { let ip = -1; return D => { while (ip + 1 < bars.length && (strict ? bars[ip + 1].d < D : bars[ip + 1].d <= D)) ip++; return ip >= 0 && test(ip); }; };
-    let maBear = () => false, volBear = () => false;
-    const ib = data[rg.symbol], vb = data["IX:" + rg.volSym];
-    if (rg.rule !== "vol" && ib?.length) { const ima = smaArr(ib.map(b => b.c), rg.ma); maBear = lookup(ib, i => ima[i] != null && ib[i].c <= ima[i], false); }
-    if (rg.rule !== "ma" && vb?.length) volBear = lookup(vb, i => vb[i].c > rg.volTh, rg.volLag);
-    bearOn = D => { const a = maBear(D), b = volBear(D); return a || b; };
+    // 各条件を「その日は弱気か」を返す関数にする。その日までに分かっている最後の値で判定（lag なら前日まで）
+    const tests = rg.filters.map(f => {
+      const b = data[f.key];
+      if (!b?.length) return null;
+      let ip = -1, jp = -1;
+      const at = D => { while (ip + 1 < b.length && (f.lag ? b[ip + 1].d < D : b[ip + 1].d <= D)) ip++; return ip; };
+      let cond;
+      if (f.kind === "trend") { const m = smaArr(b.map(x => x.c), f.ma); cond = i => m[i] == null ? null : (f.cond === "above" ? b[i].c > m[i] : b[i].c <= m[i]); }
+      else if (f.kind === "level") cond = i => f.op === "gt" ? b[i].c > f.th : b[i].c < f.th;
+      else cond = i => {
+        const t = new Date(b[i].d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - f.days);
+        const past = t.toISOString().slice(0, 10);
+        while (jp + 1 < b.length && b[jp + 1].d <= past) jp++;
+        if (jp < 0) return null;
+        const diff = b[i].c - b[jp].c;
+        return f.dir === "up" ? diff >= f.th : diff <= -f.th;
+      };
+      // 分からない日（データ不足）は弱気にしない
+      return D => { const i = at(D); if (i < 0) return false; const c = cond(i); return c == null ? false : (f.role === "only" ? !c : c); };
+    }).filter(Boolean);
+    bearOn = D => { let bear = false; for (const t of tests) if (t(D)) bear = true; return bear; };
   }
   let bearDays = 0;
   const slip = cfg.slipPct / 100, fee = cfg.feePct / 100;

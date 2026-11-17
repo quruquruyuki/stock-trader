@@ -1,5 +1,5 @@
 // 株ラボ（stock-trader）の Edge Function
-// ・株価の取得と保存（日本株: J-Quants API、米国株: Tiingo、恐怖指数: Cboe の VIX・日経平均VI）
+// ・株価の取得と保存（日本株: J-Quants API、米国株: Tiingo、恐怖指数: Cboe の VIX・日経平均VI、政策金利: FRED）
 // ・模擬取引ボットの作成・実行・停止（実際の注文は一切出さない）
 //
 // 使う Secrets:
@@ -40,7 +40,7 @@ const json = (body: unknown, status = 200) =>
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 type Bar = { d: string; o: number; h: number; l: number; c: number; v: number };
-type Market = "JP" | "US" | "IX"; // IX = 恐怖指数（VIX, NKVI）
+type Market = "JP" | "US" | "IX"; // IX = 指標（恐怖指数 VIX・NKVI、政策金利 FF・JPR）
 const REFRESH_MS = 3 * 60 * 60 * 1000; // 3時間以内に取得済みなら取り直さない
 
 /* ---------- 株価の取得 ---------- */
@@ -102,7 +102,17 @@ async function fetchUS(ticker: string, from: string | null): Promise<{ bars: Bar
 }
 
 // 恐怖指数。VIX は Cboe の公開CSV（だめなら FRED）、日経平均VI は日経平均プロフィルの公開CSV
-const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI" };
+const IX_NAMES: Record<string, string> = { VIX: "VIX（米国・S&P500）", NKVI: "日経平均VI", FF: "米国の政策金利（FF金利）", JPR: "日本の短期金利（コール翌日物・月次）" };
+// FRED の公開CSV（キー不要）。金利は 0 やマイナスもあるので、数値ならそのまま使う
+const FRED_ID: Record<string, string> = { FF: "DFF", JPR: "IRSTCI01JPM156N" };
+async function fredSeries(id: string): Promise<Bar[]> {
+  const out: Bar[] = [];
+  for (const line of (await getText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}`)).split(/\r?\n/)) {
+    const p = line.split(","), c = Number(p[1]);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(p[0] ?? "") && p[1] !== "" && p[1] !== "." && Number.isFinite(c)) out.push({ d: p[0], o: c, h: c, l: c, c, v: 0 });
+  }
+  return out;
+}
 async function getText(url: string, enc = "utf-8") {
   const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (stock-trader; personal use)" } });
   if (!r.ok) throw new HttpError(502, `${new URL(url).hostname}（${r.status}）`);
@@ -111,7 +121,8 @@ async function getText(url: string, enc = "utf-8") {
 async function fetchIX(symbol: string, from: string | null): Promise<{ bars: Bar[]; name: string | null }> {
   const bars: Bar[] = [];
   const num = (x: string) => { const n = Number(String(x ?? "").replace(/["\s]/g, "")); return Number.isFinite(n) && n > 0 ? n : null; };
-  if (symbol === "VIX") {
+  if (FRED_ID[symbol]) bars.push(...await fredSeries(FRED_ID[symbol]));
+  else if (symbol === "VIX") {
     try {
       for (const line of (await getText("https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv")).split(/\r?\n/)) {
         const p = line.split(","), m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((p[0] ?? "").trim());
@@ -121,10 +132,7 @@ async function fetchIX(symbol: string, from: string | null): Promise<{ bars: Bar
       if (!bars.length) throw new Error("empty");
     } catch (_) {
       bars.length = 0;
-      for (const line of (await getText("https://fred.stlouisfed.org/graph/fredgraph.csv?id=VIXCLS")).split(/\r?\n/)) {
-        const p = line.split(","), c = num(p[1]);
-        if (/^\d{4}-\d{2}-\d{2}$/.test(p[0] ?? "") && c) bars.push({ d: p[0], o: c, h: c, l: c, c, v: 0 });
-      }
+      bars.push(...await fredSeries("VIXCLS"));
     }
   } else {
     // 列: データ日付, 終値, 始値, 高値, 安値（Shift_JIS）
@@ -140,7 +148,7 @@ async function fetchIX(symbol: string, from: string | null): Promise<{ bars: Bar
 
 function cleanSymbol(market: Market, s: string) {
   const v = String(s).trim().toUpperCase();
-  if (market === "IX") { if (!IX_NAMES[v]) throw new HttpError(400, `恐怖指数は VIX か NKVI を指定してください: ${s}`); return v; }
+  if (market === "IX") { if (!IX_NAMES[v]) throw new HttpError(400, `この指標は使えません: ${s}`); return v; }
   if (market === "JP") { if (!/^\d{4}[0-9A-Z]?$|^\d{3}[A-Z]\d?$/.test(v)) throw new HttpError(400, `銘柄コードが正しくありません: ${s}（例: 7203）`); }
   else if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(v)) throw new HttpError(400, `ティッカーが正しくありません: ${s}（例: AAPL）`);
   return v;
@@ -203,14 +211,14 @@ const lookbackFrom = (lastDate: string | null) => {
   return d.toISOString().slice(0, 10);
 };
 
-// 相場フィルターで使う指数（ETF）。未指定なら日本株は TOPIX連動ETF、米国株は S&P500 ETF
-const defaultIndex = (market: Market) => market === "US" ? "SPY" : "1306";
+// 設定を整える。相場フィルターの各条件のデータ名を確かめ、日本株で米国のデータを見る条件は前日までで判定する
+const US_TIMED = (key: string) => !key.startsWith("JP:") && key !== "IX:NKVI" && key !== "IX:JPR";
 function withRegime(market: Market, cfgIn: any) {
   const cfg: any = normalizeCfg(cfgIn);
-  if (cfg.regime.mode !== "off") {
-    cfg.regime.symbol = cleanSymbol(market, cfg.regime.symbol || defaultIndex(market));
-    if (!cfg.regime.volSym) cfg.regime.volSym = market === "US" ? "VIX" : "NKVI";
-    cfg.regime.volLag = market === "JP" && cfg.regime.volSym === "VIX"; // 米国の終値は日本の引け後に出るので前日までで判定
+  for (const f of cfg.regime.filters) {
+    const [m, sym] = f.key.split(":");
+    f.key = `${m}:${cleanSymbol(m as Market, sym)}`;
+    f.lag = market === "JP" && US_TIMED(f.key); // 米国の終値は日本の引け後に出る
   }
   if ((STRATEGIES as any)[cfg.strategy]?.needsVol) {
     if (!cfg.fearSym) cfg.fearSym = market === "US" ? "VIX" : "NKVI";
@@ -218,17 +226,17 @@ function withRegime(market: Market, cfgIn: any) {
   }
   return cfg;
 }
-const regimeSymbol = (cfg: any): string | null => cfg.regime?.mode === "auto" && cfg.regime.rule !== "vol" ? cfg.regime.symbol : null;
-// 必要な恐怖指数（相場フィルター用と、恐怖指数を使う戦略用）
-const volSymbols = (cfg: any): string[] => [...new Set([
-  ...(cfg.regime?.mode === "auto" && cfg.regime.rule !== "ma" && cfg.regime.volSym ? [cfg.regime.volSym] : []),
-  ...((STRATEGIES as any)[cfg.strategy]?.needsVol && cfg.fearSym ? [cfg.fearSym] : []),
-])];
-// 恐怖指数のデータを data["IX:VIX"] のような名前で足す
-async function addVol(cfg: any, data: Record<string, Bar[]>, from: string | null, errors?: string[]) {
-  for (const vs of volSymbols(cfg)) {
-    try { await ensure("IX", vs); data["IX:" + vs] = await loadBars("IX", vs, from); if (!data["IX:" + vs].length) throw new Error("データがありません"); }
-    catch (e) { const msg = `恐怖指数 ${vs}: ${e instanceof Error ? e.message : e}`; if (errors) errors.push(msg); else throw new HttpError(400, msg); }
+// 売買する銘柄のほかに必要なデータ（相場フィルターの条件、恐怖指数を使う戦略）
+const extraKeys = (cfg: any): string[] => [...new Set([
+  ...(cfg.regime?.mode === "auto" ? cfg.regime.filters.map((f: any) => f.key) : []),
+  ...((STRATEGIES as any)[cfg.strategy]?.needsVol && cfg.fearSym ? ["IX:" + cfg.fearSym] : []),
+])] as string[];
+// data["US:GLD"] や data["IX:VIX"] のような名前で足す
+async function addExtra(cfg: any, data: Record<string, Bar[]>, from: string | null, errors?: string[]) {
+  for (const key of extraKeys(cfg)) {
+    const [m, sym] = key.split(":");
+    try { await ensure(m as Market, sym); data[key] = await loadBars(m as Market, sym, from); if (!data[key].length) throw new Error("データがありません"); }
+    catch (e) { const msg = `${key}: ${e instanceof Error ? e.message : e}`; if (errors) errors.push(msg); else throw new HttpError(400, msg); }
   }
 }
 
@@ -236,8 +244,7 @@ async function createBot(userId: string, body: any) {
   const market: Market = body.market === "US" ? "US" : "JP";
   const cfg = withRegime(market, { ...body.cfg, symbols: (body.cfg?.symbols ?? []).map((s: string) => cleanSymbol(market, s)) });
   if (!cfg.symbols.length) throw new HttpError(400, "銘柄を1つ以上入れてください");
-  const rs = regimeSymbol(cfg);
-  const { symbols: got, errors } = await bars(market, [...new Set([...cfg.symbols, ...(rs ? [rs] : [])])], lookbackFrom(null));
+  const { symbols: got, errors } = await bars(market, cfg.symbols, lookbackFrom(null));
   if (Object.keys(errors).length) throw new HttpError(400, Object.values(errors)[0]);
   // 最新の1日ぶんから判定を始める（今日の終値でシグナルを見て、次の営業日の始値で約定）
   const dates = [...new Set(cfg.symbols.flatMap((s: string) => got[s].bars.map(b => b.d)))].sort() as string[];
@@ -245,7 +252,7 @@ async function createBot(userId: string, body: any) {
   const st: any = initialState(cfg.initialCash);
   st.lastDate = dates[dates.length - 2];
   const data: Record<string, Bar[]> = Object.fromEntries(Object.entries(got).map(([k, v]) => [k, v.bars]));
-  await addVol(cfg, data, lookbackFrom(null));
+  await addExtra(cfg, data, lookbackFrom(null));
   const name = String(body.name ?? "").trim().slice(0, 40) || `${(STRATEGIES as any)[cfg.strategy].label}（${cfg.symbols.join("・")}）`;
   const { data: bot, error } = await db.from("st_bots").insert({ user_id: userId, name, market, cfg, state: st, active: true }).select().single();
   if (error) throw new HttpError(500, error.message);
@@ -299,12 +306,11 @@ async function runBot(bot: any, preloaded?: Record<string, Bar[]>) {
   const errors: string[] = [];
   if (!data) {
     data = {};
-    const rs = regimeSymbol(cfg);
-    for (const s of [...new Set([...cfg.symbols, ...(rs ? [rs] : [])])]) {
+    for (const s of cfg.symbols) {
       try { await ensure(bot.market, s); data[s] = await loadBars(bot.market, s, lookbackFrom(bot.state.lastDate)); }
       catch (e) { errors.push(`${s}: ${e instanceof Error ? e.message : e}`); }
     }
-    await addVol(cfg, data, lookbackFrom(bot.state.lastDate), errors);
+    await addExtra(cfg, data, lookbackFrom(bot.state.lastDate), errors);
   }
   const r = runDays(cfg, bot.state, data, { applyHalts: true });
   const days = r.equity.length;
@@ -445,12 +451,10 @@ Deno.serve(async (req) => {
         return json({ ok: true });
       }
       case "set_regime": {
-        // 相場感の切り替え（auto=指数で自動 / bull=強気で固定 / bear=弱気で固定 / off=使わない）
+        // 相場感の切り替え（auto=条件で自動 / bull=強気で固定 / bear=弱気で固定 / off=使わない）
         const bot = await ownBot(user.id, body.id);
         const cfg = withRegime(bot.market, { ...bot.cfg, regime: { ...(bot.cfg.regime ?? {}), ...(body.regime ?? {}) } });
-        const rs = regimeSymbol(cfg);
-        if (rs) { const r = await bars(bot.market, [rs], lookbackFrom(null)); if (Object.keys(r.errors).length) throw new HttpError(400, Object.values(r.errors)[0]); }
-        await addVol(cfg, {}, lookbackFrom(null));
+        await addExtra(cfg, {}, lookbackFrom(null));
         await db.from("st_bots").update({ cfg, state: { ...bot.state, regimeBear: null } }).eq("id", bot.id);
         return json({ ok: true });
       }

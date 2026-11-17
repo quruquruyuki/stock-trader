@@ -128,17 +128,56 @@ function spark(pts, up) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${up ? "#0f7a55" : "#b8392e"}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
+/* ---------- 相場フィルターの条件 ---------- */
+// 条件のひな形。make(市場, 数値) で エンジン用の条件にする。role は初期の使い方（avoid=控える / only=この時だけ）
+const tr = (key, cond) => (m, v) => ({ kind: "trend", key: typeof key === "function" ? key(m) : key, ma: v, cond });
+const rt = (key, dir) => (m, v) => ({ kind: "rate", key, dir, days: 180, th: v });
+const idxKey = m => m === "JP" ? "JP:1306" : "US:SPY", fearKey = m => m === "JP" ? "IX:NKVI" : "IX:VIX";
+const RG_PRESETS = {
+  idxdown: { group: "株", label: "株価指数が下向き", sub: m => `${m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）"}が移動平均より下`, unit: "移動平均（日）", def: () => 200, byMarket: true, role: "avoid", make: tr(idxKey, "below") },
+  idxup: { group: "株", label: "株価指数が上向き", sub: m => `${m === "JP" ? "TOPIX（1306）" : "S&P500（SPY）"}が移動平均より上`, unit: "移動平均（日）", def: () => 200, byMarket: true, role: "only", make: tr(idxKey, "above") },
+  fearhigh: { group: "株", label: "恐怖指数が高い", sub: m => `${m === "JP" ? "日経平均VI" : "VIX"}がこの値より上`, unit: "この値を超えたら", def: m => m === "JP" ? 30 : 25, byMarket: true, role: "avoid", make: (m, v) => ({ kind: "level", key: fearKey(m), op: "gt", th: v }) },
+  fearlow: { group: "株", label: "恐怖指数が低い", sub: m => `${m === "JP" ? "日経平均VI" : "VIX"}がこの値より下`, unit: "この値を下回ったら", def: m => m === "JP" ? 20 : 15, byMarket: true, role: "only", make: (m, v) => ({ kind: "level", key: fearKey(m), op: "lt", th: v }) },
+  hike: { group: "金利", label: "利上げ局面（米国）", sub: () => "米国の政策金利が半年前より上がっている", unit: "半年の上げ幅（%）", def: () => 0.25, role: "avoid", make: rt("IX:FF", "up") },
+  cut: { group: "金利", label: "利下げ局面（米国）", sub: () => "米国の政策金利が半年前より下がっている", unit: "半年の下げ幅（%）", def: () => 0.25, role: "only", make: rt("IX:FF", "down") },
+  jhike: { group: "金利", label: "利上げ局面（日本）", sub: () => "日本の短期金利が半年前より上がっている（月次）", unit: "半年の上げ幅（%）", def: () => 0.1, role: "avoid", make: rt("IX:JPR", "up") },
+  jcut: { group: "金利", label: "利下げ局面（日本）", sub: () => "日本の短期金利が半年前より下がっている（月次）", unit: "半年の下げ幅（%）", def: () => 0.1, role: "only", make: rt("IX:JPR", "down") },
+  goldup: { group: "金・債券", label: "金が上がっている", sub: () => "金ETF（GLD）が移動平均より上", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("US:GLD", "above") },
+  golddown: { group: "金・債券", label: "金が下がっている", sub: () => "金ETF（GLD）が移動平均より下", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:GLD", "below") },
+  bondup: { group: "金・債券", label: "債券が上がっている", sub: () => "米国の長期国債ETF（TLT）が移動平均より上（＝長期金利は低下）", unit: "移動平均（日）", def: () => 200, role: "only", make: tr("US:TLT", "above") },
+  bonddown: { group: "金・債券", label: "債券が下がっている", sub: () => "米国の長期国債ETF（TLT）が移動平均より下（＝長期金利は上昇）", unit: "移動平均（日）", def: () => 200, role: "avoid", make: tr("US:TLT", "below") },
+};
+const RG_MAX = 8;
+let rgRows = []; // { preset, role, val, market }
+// 日本株で米国のデータを見る条件は、前日までの値で判定する（米国の終値は日本の引け後に出る）
+const usTimed = key => !key.startsWith("JP:") && key !== "IX:NKVI" && key !== "IX:JPR";
+const rgFilter = (r, m) => { const f = RG_PRESETS[r.preset].make(m, Number(r.val)); return { ...f, role: r.role, lag: m === "JP" && usTimed(f.key) }; };
+function renderRg() {
+  $("rgList").innerHTML = rgRows.map((r, i) => {
+    const P = RG_PRESETS[r.preset];
+    return `<div class="rgrow"><div class="t"><span>${esc(P.label)}<small>${esc(P.sub(market))}</small></span><button class="x" data-del="${i}" aria-label="この条件を消す">×</button></div>
+      <div class="g"><div><label class="lab" for="rgRole${i}">この条件のとき</label><select class="in" id="rgRole${i}" data-role="${i}"><option value="avoid" ${r.role === "avoid" ? "selected" : ""}>売買を控える</option><option value="only" ${r.role === "only" ? "selected" : ""}>この時だけ売買する</option></select></div>
+      <div><label class="lab" for="rgVal${i}">${esc(P.unit)}</label><input class="in num" id="rgVal${i}" data-val="${i}" inputmode="decimal" value="${esc(String(r.val))}"></div></div></div>`;
+  }).join("");
+  const used = new Set(rgRows.map(r => r.preset)), groups = {};
+  for (const [k, P] of Object.entries(RG_PRESETS)) (groups[P.group] ||= []).push(`<option value="${k}" ${used.has(k) ? "disabled" : ""}>${esc(P.label)}</option>`);
+  $("rgAdd").innerHTML = `<option value="">＋ 条件を追加する…</option>` + Object.entries(groups).map(([g, o]) => `<optgroup label="${g}">${o.join("")}</optgroup>`).join("");
+  $("rgAdd").disabled = rgRows.length >= RG_MAX;
+  $("rgActBox").classList.toggle("hidden", !rgRows.length);
+  $("rgHint").textContent = !rgRows.length ? "条件を足さなければ、相場フィルターは使いません。条件は組み合わせて使えます（例：利下げ局面の「時だけ」＋恐怖指数が高い時は「控える」）。"
+    : `${rgRows.length > 1 ? "条件のどれか1つでも売買しない側に当てはまる日を" : "売買しない側に当てはまる日を"}「弱気」とみなして、上の動きをします。空売りのときは逆で、「弱気」の日だけ仕掛けます。${market === "JP" && rgRows.some(r => usTimed(rgFilter(r, market).key)) ? "米国のデータを見る条件は、前日までの値で判定します。" : ""}`;
+}
+
 /* ---------- バックテスト画面 ---------- */
 function setMarket(m) {
   market = m;
   $("btSymbols").placeholder = m === "JP" ? "7203, 6758" : "AAPL, MSFT";
   $("btSymHint").textContent = m === "JP" ? "4桁の銘柄コード（例：7203 トヨタ、6758 ソニーG）" : "ティッカー（例：AAPL アップル、MSFT マイクロソフト、SPY S&P500 ETF）";
   $("btCashLab").textContent = m === "JP" ? "初期資金（円）" : "初期資金（ドル）";
-  $("btRgSym").value = m === "JP" ? "1306" : "SPY";
-  $("btRgVolSym").value = m === "JP" ? "NKVI" : "VIX";
   $("btFearSym").value = m === "JP" ? "NKVI" : "VIX";
-  $("btRgVolTh").value = m === "JP" ? "30" : "25";
-  $("btRgHint").textContent = `指数の終値が移動平均以下の日を「弱気」とみなします。初期値は${m === "JP" ? "TOPIX連動ETF（1306）" : "S&P500 ETF（SPY）"}の200日線です。`;
+  // 市場で変わる条件（株価指数・恐怖指数）は、初期値のままなら新しい市場の初期値に合わせる
+  for (const r of rgRows) { const P = RG_PRESETS[r.preset]; if (P.byMarket && r.val === P.def(r.market)) r.val = P.def(m); r.market = m; }
+  renderRg();
   $("btCash").value = m === "JP" ? "1000000" : "10000";
   $("btLot").innerHTML = m === "JP"
     ? `<option value="100">100株（単元株）</option><option value="1">1株（単元未満株）</option>`
@@ -162,8 +201,7 @@ function readCfg() {
     feePct: n("btFee"), slipPct: n("btSlip"), maxPosPct: n("btPos"), trendMa: n("btTrend"),
     side: $("btSide").value, borrowPct: n("btBorrow"),
     fearSym: STRATEGIES[strategy].needsVol ? $("btFearSym").value : "", fearLag: market === "JP" && $("btFearSym").value === "VIX",
-    regime: { mode: $("btRgMode").value, symbol: $("btRgSym").value, ma: n("btRgMa"), action: $("btRgAct").value,
-      rule: $("btRgRule").value, volSym: $("btRgVolSym").value, volTh: n("btRgVolTh"), volLag: market === "JP" && $("btRgVolSym").value === "VIX" },
+    regime: { mode: rgRows.length ? "auto" : "off", action: $("btRgAct").value, filters: rgRows.map(r => rgFilter(r, market)) },
   });
 }
 const isoAgo = days => { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10); };
@@ -190,19 +228,17 @@ $("btRun").onclick = async () => {
   if (cfg.strategy === "tma" && !(cfg.params.short < cfg.params.mid && cfg.params.mid < cfg.params.long)) { $("btErr").textContent = "移動平均は 短期＜中期＜長期 の順にしてください"; return; }
   if (cfg.strategy === "fear" && cfg.params.sell >= cfg.params.buy) { $("btErr").textContent = "「手じまい」は「仕掛け」より小さくしてください"; return; }
   if (cfg.strategy === "stoch" && cfg.params.buy >= cfg.params.sell) { $("btErr").textContent = "「買い」は「売り」より小さくしてください"; return; }
-  const rgSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "vol" ? (cfg.regime.symbol || (market === "JP" ? "1306" : "SPY")) : null;
-  const volSym = cfg.regime.mode === "auto" && cfg.regime.rule !== "ma" ? cfg.regime.volSym : null;
-  if (rgSym) cfg.regime.symbol = rgSym;
+  if (rgRows.some(r => !(Number(r.val) > 0))) { $("btErr").textContent = "相場フィルターの数値を入れてください"; return; }
   busy($("btRun"), true, "株価を取得して計算中…");
   try {
     const start = period ? isoAgo(Math.round(period * 365.25)) : null;
     const from = start ? isoAgo(Math.round(period * 365.25) + 600) : null; // シグナルの助走分も取る
-    const { data, errors } = await getBars(market, [...new Set([...cfg.symbols, ...(rgSym ? [rgSym] : [])])], from);
-    if (rgSym && !data[rgSym]?.length) throw new Error(`相場フィルターの指数 ${rgSym} の株価が取得できませんでした${errors[rgSym] ? "：" + errors[rgSym] : ""}`);
-    for (const vs of [...new Set([volSym, cfg.fearSym].filter(Boolean))]) {
-      const v = await getBars("IX", [vs], from);
-      if (!v.data[vs]?.length) throw new Error(`恐怖指数 ${VOL_NAME[vs]} が取得できませんでした${v.errors[vs] ? "：" + v.errors[vs] : ""}`);
-      data["IX:" + vs] = v.data[vs];
+    const { data, errors } = await getBars(market, cfg.symbols, from);
+    // 相場フィルターの条件と、恐怖指数を使う戦略のデータ。data["US:GLD"] のような名前で足す
+    for (const key of new Set([...cfg.regime.filters.map(f => f.key), ...(cfg.fearSym ? ["IX:" + cfg.fearSym] : [])])) {
+      const [km, ks] = key.split(":"), v = await getBars(km, [ks], from);
+      if (!v.data[ks]?.length) throw new Error(`${keyName(key)} のデータが取得できませんでした${v.errors[ks] ? "：" + v.errors[ks] : ""}`);
+      data[key] = v.data[ks];
     }
     const ok = cfg.symbols.filter(s => data[s]?.length);
     const errText = Object.entries(errors).map(([s, e]) => `${s}：${e}`).join("\n");
@@ -270,14 +306,22 @@ const paramText = cfg => {
 };
 const VOL_NAME = { VIX: "VIX", NKVI: "日経平均VI" };
 const RG_ACT = { nobuy: "新しく買わない", exit: "持ち株も売って待つ", half: "買う量を半分にする" };
+const KEY_NAME = { "JP:1306": "TOPIX（1306）", "US:SPY": "S&P500（SPY）", "US:GLD": "金（GLD）", "US:TLT": "米国長期債（TLT）", "IX:VIX": "VIX", "IX:NKVI": "日経平均VI", "IX:FF": "米国の政策金利", "IX:JPR": "日本の短期金利" };
+const keyName = k => KEY_NAME[k] || String(k).split(":").pop();
+const filterText = f => {
+  const what = f.kind === "trend" ? `${keyName(f.key)}が${f.ma}日線より${f.cond === "above" ? "上" : "下"}`
+    : f.kind === "level" ? `${keyName(f.key)}が${f.th}${f.op === "gt" ? "超" : "未満"}`
+    : `${keyName(f.key)}が約${Math.round(f.days / 30)}か月で${f.th}%以上${f.dir === "up" ? "上昇" : "低下"}`;
+  return `${what}${f.lag ? "（前日まで）" : ""}${f.role === "only" ? "の時だけ売買" : "なら控える"}`;
+};
 const regimeText = cfg => {
   const r = cfg.regime || { mode: "off" };
   if (r.mode === "off") return "使わない";
   const act = `弱気のとき：${RG_ACT[r.action] || RG_ACT.nobuy}`;
   if (r.mode === "bull") return "強気で固定";
   if (r.mode === "bear") return `弱気で固定／${act}`;
-  const ma = `${r.symbol} が${r.ma}日線以下`, vol = `${VOL_NAME[r.volSym] || r.volSym} が${r.volTh}超${r.volLag ? "（前日まで）" : ""}`;
-  return `${r.rule === "vol" ? vol : r.rule === "either" ? `${ma}、または${vol}` : ma}なら弱気／${act}`;
+  const fs = r.filters || [];
+  return fs.length ? `${fs.map(filterText).join("、")}／${act}` : "条件なし（いつも強気）";
 };
 const shortParams = (st, p) => (STRATEGIES[st]?.params || []).map(x => `${x.label.replace(/（.*）/, "").replace(/^買い：|^売り：/, "")}${p[x.key]}`).join(" / ");
 
@@ -558,7 +602,7 @@ async function openBot(id) {
     <div class="card"><h2>取引履歴</h2><div class="tscroll"><table class="t">${tradeTable(trRes.data || [], m)}</table></div></div>
     <div class="card"><h2>相場感（市況）</h2>
       <div class="seg" id="bsRg">${[["off", "使わない"], ["auto", "自動"], ["bull", "強気"], ["bear", "弱気"]].map(([v, l]) => `<button data-v="${v}" class="${(cfg.regime?.mode || "off") === v ? "on" : ""}">${l}</button>`).join("")}</div>
-      <p class="hint">${(cfg.regime?.mode || "off") === "off" ? "相場フィルターは使っていません。「自動」は指数で判定、「強気」「弱気」は自分の相場感で固定します。" : `いまの判定：<b class="${st.regimeBear ? "dn" : "up"}">${st.regimeBear == null ? "次の更新で判定" : st.regimeBear ? "弱気" : "強気"}</b>（${esc(regimeText(cfg))}）`}</p>
+      <p class="hint">${(cfg.regime?.mode || "off") === "off" ? "相場フィルターは使っていません。「自動」は検証で決めた条件で判定、「強気」「弱気」は自分の相場感で固定します。" : `いまの判定：<b class="${st.regimeBear ? "dn" : "up"}">${st.regimeBear == null ? "次の更新で判定" : st.regimeBear ? "弱気" : "強気"}</b>（${esc(regimeText(cfg))}）`}</p>
       ${(cfg.regime?.mode || "off") !== "off" ? `<select id="bsRgAct" class="in" style="margin-top:8px">${Object.entries(RG_ACT).map(([v, l]) => `<option value="${v}" ${cfg.regime.action === v ? "selected" : ""}>弱気のとき：${l}</option>`).join("")}</select>` : ""}
     </div>
     <div class="card"><h2>設定</h2>
@@ -602,7 +646,7 @@ const VOL_LEVEL = { VIX: [20, 30], NKVI: [25, 35] };
 const VOL_DESC = { VIX: "米国株（S&P500）の今後1か月の値動きの見込み。20未満は平常、30超は強い警戒。", NKVI: "日経平均の今後1か月の値動きの見込み。ふだんは20〜30あたり、30を大きく超えると荒れ模様。" };
 async function loadMarket() {
   const from = isoAgo(420), out = [];
-  const [ix, us, jp] = await Promise.allSettled([getBars("IX", ["NKVI", "VIX"], from), getBars("US", ["SPY"], isoAgo(700)), getBars("JP", ["1306"], isoAgo(700))]);
+  const [ix, us, jp, rate] = await Promise.allSettled([getBars("IX", ["NKVI", "VIX"], from), getBars("US", ["SPY", "GLD", "TLT"], isoAgo(700)), getBars("JP", ["1306"], isoAgo(700)), getBars("IX", ["FF", "JPR"], isoAgo(700))]);
   const charts = [];
   if (ix.status === "fulfilled") {
     for (const s of ["NKVI", "VIX"]) {
@@ -627,7 +671,20 @@ async function loadMarket() {
     return `<div class="keyrow"><span>${label}<br><span class="mu" style="font-size:12px">${n}日線との差 <span class="num">${pct(diff)}</span>・${fmtD(last.d)}</span></span><span class="${diff > 0 ? "ok" : "ng"}">${diff > 0 ? "強気" : "弱気"}</span></div>`;
   };
   out.push(`<div class="card"><h2>指数のトレンド</h2>${trend(jp, "1306", "日本株（TOPIX連動ETF 1306）")}${trend(us, "SPY", "米国株（S&P500 ETF SPY）")}
-    <p class="hint">相場フィルターの「指数の移動平均」と同じ見方です。日本株は無料プランのため約12週間遅れのデータです。</p></div>`);
+    <p class="hint">相場フィルターの「株価指数が上向き・下向き」と同じ見方です。日本株は無料プランのため約12週間遅れのデータです。</p></div>`);
+  // 金利の局面（半年前との差）と、金・債券の向き
+  const phase = (sym, label, th) => {
+    const b = rate.status === "fulfilled" ? rate.value.data[sym] : null;
+    if (!b?.length) return `<div class="keyrow"><span>${label}</span><span class="mu">取得できません</span></div>`;
+    const last = b[b.length - 1], t = new Date(last.d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - 180);
+    const past = b.filter(x => x.d <= t.toISOString().slice(0, 10)).pop();
+    if (!past) return `<div class="keyrow"><span>${label}</span><span class="mu">データ不足</span></div>`;
+    const diff = last.c - past.c, ph = diff >= th ? "利上げ局面" : diff <= -th ? "利下げ局面" : "据え置き";
+    return `<div class="keyrow"><span>${label}<br><span class="mu" style="font-size:12px"><span class="num">${last.c.toFixed(2)}%</span>・半年前から <span class="num">${diff >= 0 ? "+" : ""}${diff.toFixed(2)}</span>・${fmtD(last.d)}</span></span><span>${ph}</span></div>`;
+  };
+  const dir = (sym, label) => trend(us, sym, label).replace("強気", "上向き").replace("弱気", "下向き");
+  out.push(`<div class="card"><h2>金利・金・債券</h2>${phase("FF", "米国の政策金利（FF金利）", 0.25)}${phase("JPR", "日本の短期金利（月次）", 0.1)}${dir("GLD", "金（ETF GLD）")}${dir("TLT", "米国の長期国債（ETF TLT）")}
+    <p class="hint">相場フィルターの「利上げ・利下げ局面」「金・債券が上がっている」と同じ見方です。債券が上向きのときは、長期金利が下がっています。</p></div>`);
   $("mktBody").innerHTML = out.join("");
   charts.forEach(f => f());
 }
@@ -677,9 +734,18 @@ sb.auth.onAuthStateChange((_ev, session) => {
 /* ---------- 初期化 ---------- */
 $("btStrategy").innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
 $("btStrategy").onchange = renderParams;
-$("btRgMode").onchange = () => $("btRgBox").classList.toggle("hidden", $("btRgMode").value !== "auto");
-$("btRgRule").onchange = () => { const r = $("btRgRule").value; $("btRgMaBox").classList.toggle("hidden", r === "vol"); $("btRgVolBox").classList.toggle("hidden", r === "ma"); };
-$("btRgVolSym").onchange = () => { $("btRgVolTh").value = $("btRgVolSym").value === "NKVI" ? "30" : "25"; };
+$("rgAdd").onchange = e => {
+  const k = e.target.value, P = RG_PRESETS[k];
+  if (P && rgRows.length < RG_MAX) rgRows.push({ preset: k, role: P.role, val: P.def(market), market });
+  renderRg();
+};
+$("rgList").addEventListener("click", e => { const b = e.target.closest("[data-del]"); if (b) { rgRows.splice(Number(b.dataset.del), 1); renderRg(); } });
+$("rgList").addEventListener("input", e => { const t = e.target; if (t.dataset.val != null) rgRows[Number(t.dataset.val)].val = Number(String(t.value).replace(/[,\s]/g, "")) || 0; });
+$("rgList").addEventListener("change", e => {
+  const t = e.target;
+  if (t.dataset.role != null) { rgRows[Number(t.dataset.role)].role = t.value; renderRg(); }
+  else if (t.dataset.val != null) rgRows[Number(t.dataset.val)].val = Number(String(t.value).replace(/[,\s]/g, "")) || 0;
+});
 segInit("btMarket", setMarket);
 segInit("btPeriod", v => period = Number(v));
 setMarket("JP");
