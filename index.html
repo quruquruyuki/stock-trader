@@ -115,6 +115,8 @@ a.ext b{display:block;font-size:15px;color:var(--acc)} a.ext span{font-size:12px
 .mk .big{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1}
 .lv{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px}
 .lv.calm{background:#e3f1ea;color:var(--up)} .lv.warn{background:#fbf1dc;color:var(--warn)} .lv.hot{background:#fbe9e6;color:var(--dn)}
+.seg.wrap{flex-wrap:wrap;height:auto}
+.seg.wrap button{flex:1 1 30%}
 .segrow{padding:10px 0;border-top:1px solid var(--line)}
 .segrow.head{border-top:0;padding-bottom:4px}
 .segrow.r{cursor:pointer} .segrow.r:active{background:var(--soft)}
@@ -289,7 +291,9 @@ ol.steps code,p code{font-family:var(--mono);font-size:12px;background:var(--sof
 
       <div class="card">
         <h2>組み合わせを自動で探す</h2>
-        <p class="hint" style="margin:0 0 12px">上の銘柄・期間・資金の設定のまま、すべての戦略 × 相場フィルター（なし＋各条件1つずつ）を一気に試します。期間を前半（7割）と後半（3割）に分け、<b>どちらでも</b>「買って持ち続ける」より効率が良かったものだけを上に並べます。</p>
+        <p class="hint" style="margin:0 0 12px">上の銘柄・期間・資金の設定のまま、すべての戦略 × 相場フィルター（なし＋各条件1つずつ）を一気に試し、年ごと（短い期間は半年・3か月ごと）に「買って持ち続ける」と比べます。</p>
+        <span class="lab">何を優先して並べるか（結果が出たあとも切り替えられます）</span>
+        <div class="seg wrap" id="exPrio" style="margin-bottom:12px"><button data-v="balance" class="on">区間の勝ち数</button><button data-v="ret">損益</button><button data-v="dd">下落の小ささ</button><button data-v="sharpe">効率</button><button data-v="calmar">年率÷下落</button></div>
         <button class="btn ghost" id="exRun">自動で探す</button>
         <div id="exOut"></div>
       </div>

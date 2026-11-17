@@ -393,6 +393,76 @@ function renderRecent() {
   $("btRecent").innerHTML = seen.slice(0, 8).map(s => `<button data-s="${esc(s)}">${esc(symLabel(market, s))}</button>`).join("");
 }
 
+/* ---------- 自動探索の結果（優先する見方で並べかえる） ---------- */
+let exState = null;
+const EX_PRIO = {
+  balance: { label: "区間の勝ち数", hint: "買い持ちに勝った区間が多い順" },
+  ret: { label: "損益", hint: "全期間の損益が大きい順" },
+  dd: { label: "下落の小ささ", hint: "年率が買い持ちの7割以上のうち、最大下落が小さい順" },
+  sharpe: { label: "効率（シャープ）", hint: "値動きの大きさあたりの増え方が良い順" },
+  calmar: { label: "年率÷最大下落", hint: "最大下落1%あたりの年率が大きい順。下落を抑えてから投資額を増やす考え方の目安" },
+};
+const calmar = M => M.maxDDPct > 0 ? M.cagrPct / M.maxDDPct : 0;
+function renderEx() {
+  const out = $("exOut"), S = exState;
+  if (!S) return;
+  const prio = $("exPrio").querySelector(".on")?.dataset.v || "balance";
+  const { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates } = S;
+  const okRows = rows.filter(r => r.enough);
+  // ★の条件と並べ方
+  const pass = {
+    balance: r => r.wins >= need && r.M.sharpe > benchM.sharpe,
+    ret: r => r.M.totalPct > benchM.totalPct,
+    dd: r => r.M.cagrPct >= benchM.cagrPct * 0.7 && r.M.maxDDPct < benchM.maxDDPct * 0.7,
+    sharpe: r => r.M.sharpe > benchM.sharpe,
+    calmar: r => calmar(r.M) > calmar(benchM),
+  }[prio];
+  const key = {
+    balance: r => [r.wins, r.median],
+    ret: r => [r.M.totalPct, 0],
+    dd: r => [r.M.cagrPct >= benchM.cagrPct * 0.7 ? 1 : 0, -r.M.maxDDPct],
+    sharpe: r => [r.M.sharpe, 0],
+    calmar: r => [calmar(r.M), 0],
+  }[prio];
+  const sorted = okRows.map(r => ({ r, p: pass(r), k: key(r) })).sort((x, y) => (y.p - x.p) || (y.k[0] - x.k[0]) || (y.k[1] - x.k[1]));
+  // 成績がまったく同じもの（フィルターが一度も効かなかったなど）は1行にまとめる
+  const seen = new Map();
+  for (const x of sorted) {
+    const id = `${x.r.st}|${x.r.M.totalPct.toFixed(3)}|${x.r.M.maxDDPct.toFixed(3)}|${x.r.M.trades}`;
+    if (seen.has(id)) seen.get(id).same.push(x.r.c); else seen.set(id, { ...x.r, pass: x.p, same: [] });
+  }
+  exRows = [...seen.values()].slice(0, 15);
+  const nPass = sorted.filter(x => x.p).length;
+  const metric = M => ({ balance: null, ret: `年率 ${M.cagrPct >= 0 ? "+" : ""}${M.cagrPct.toFixed(1)}%`, dd: `下落 -${M.maxDDPct.toFixed(0)}%`, sharpe: `効率 ${M.sharpe.toFixed(2)}`, calmar: `${calmar(M).toFixed(2)}` })[prio];
+  const unitName = { year: "1年", half: "半年", quarter: "3か月" }[unit];
+  const strip = (vals, exs) => `<div class="segs" style="grid-template-columns:repeat(${K},1fr)">${vals.map((v, i) => {
+    const e = exs ? exs[i] : null, col = e == null || Math.abs(e) <= 0.5 ? "" : e > 0 ? `background:rgba(52,140,90,${Math.min(0.55, 0.12 + Math.abs(e) / 40)})` : `background:rgba(200,70,60,${Math.min(0.5, 0.1 + Math.abs(e) / 40)})`;
+    return `<span style="${col}">${v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0)}</span>`;
+  }).join("")}</div>`;
+  const ruleText = c => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ売買" : "は控える");
+  const passText = {
+    balance: `${K}区間のうち${need}区間以上で買い持ちに勝ち、全体の効率も上回った`,
+    ret: "全期間の損益で買い持ちを上回った",
+    dd: `年率が買い持ちの7割以上（${(benchM.cagrPct * 0.7).toFixed(1)}%以上）で、最大下落が買い持ちの7割未満（-${(benchM.maxDDPct * 0.7).toFixed(0)}%より小さい）`,
+    sharpe: `効率（シャープ）が買い持ちの ${benchM.sharpe.toFixed(2)} を上回った`,
+    calmar: `年率÷最大下落が買い持ちの ${calmar(benchM).toFixed(2)} を上回った`,
+  }[prio];
+  const right = (M, wins) => `${prio === "balance" ? `<b>${wins}/${K}勝</b>` : `<b>${metric(M)}</b>`}<span class="${cls(M.totalPct)}">${pct(M.totalPct)}</span><small>${prio === "dd" ? "" : `-${M.maxDDPct.toFixed(0)}%`}${prio === "balance" ? "" : `${prio === "dd" ? "" : "・"}${wins}/${K}勝`}</small>`;
+  out.innerHTML = !exRows.length ? `<div class="empty">売買が成立した組み合わせがありませんでした。売買単位や資金を見直してください</div>` : `
+    <div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(dates[dates.length - 1])}</span>）。並び：<b>${EX_PRIO[prio].hint}</b>。<br>
+    ${passText}のは <b>${nPass}通り</b>。${nPass === 0 ? "条件を満たすものはありませんでした。下は惜しかった順です。" : ""}</div>
+    <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
+    <div class="segrow base"><div class="t"><span>買って持ち続けた場合</span><span class="num">${prio === "balance" ? "" : `<b>${metric(benchM)}</b>`}<span class="${cls(benchM.totalPct)}">${pct(benchM.totalPct)}</span><small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
+    ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<small>${esc(ruleText(r.c))}${r.same.length ? `<br>（同じ結果：${esc(r.same.slice(0, 3).map(ruleText).join("、"))}${r.same.length > 3 ? ` ほか${r.same.length - 3}件` : ""}）` : ""}</small></span><span class="num">${right(r.M, r.wins)}</span></div>${strip(r.seg, r.ex)}</div>`).join("")}
+    <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は${prio === "balance" ? "勝った区間の数" : "優先した指標"}と、全期間の損益・最大下落。★は${passText}もの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
+  out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
+    const r = exRows[Number(tr.dataset.i)];
+    $("btStrategy").value = r.st; renderParams();
+    rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
+    $("btRun").click();
+  });
+}
+
 /* ---------- 組み合わせを自動で探す ---------- */
 let exRows = [];
 $("exRun").onclick = async () => {
@@ -445,27 +515,8 @@ $("exRun").onclick = async () => {
         rows.push({ st, c, M: r.metrics, seg, ex, wins, median, pass, enough });
       }
     }
-    exRows = rows.filter(r => r.enough).sort((x, y) => (y.pass - x.pass) || (y.wins - x.wins) || (y.median - x.median)).slice(0, 15);
-    const nPass = rows.filter(r => r.pass).length;
-    const unitName = { year: "1年", half: "半年", quarter: "3か月" }[unit];
-    const strip = (vals, exs) => `<div class="segs" style="grid-template-columns:repeat(${K},1fr)">${vals.map((v, i) => {
-      const e = exs ? exs[i] : null, col = e == null || Math.abs(e) <= 0.5 ? "" : e > 0 ? `background:rgba(52,140,90,${Math.min(0.55, 0.12 + Math.abs(e) / 40)})` : `background:rgba(200,70,60,${Math.min(0.5, 0.1 + Math.abs(e) / 40)})`;
-      return `<span style="${col}">${v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(0)}</span>`;
-    }).join("")}</div>`;
-    const ruleText = c => !c ? "フィルターなし" : (/[るいた]$/.test(c.P.label) ? c.P.label + "とき" : c.P.label + "のとき") + (c.f.role === "only" ? "だけ売買" : "は控える");
-    out.innerHTML = !exRows.length ? `<div class="empty">売買が成立した組み合わせがありませんでした。売買単位や資金を見直してください</div>` : `
-      <div class="swsum">${rows.length}通りを、${unitName}ごとの<b>${K}区間</b>に分けて買い持ちと比べました（<span class="num">${fmtD(dates[0])}〜${fmtD(dates[dates.length - 1])}</span>）。<br>
-      ${K}区間のうち${need}区間以上で買い持ちに勝ち、全体の効率（シャープ）も上回ったのは <b>${nPass}通り</b>。${nPass === 0 ? "この銘柄・期間では、買って持ち続けるのが一番でした。下は惜しかった順です。" : "勝った区間が多く、負けた区間の負け方が小さいものほど、偶然ではない可能性が高くなります。"}</div>
-      <div class="segrow head"><div class="t"><span class="mu">区間</span></div><div class="segs lab" style="grid-template-columns:repeat(${K},1fr)">${segs.map(g => `<span>${esc(g.label)}</span>`).join("")}</div></div>
-      <div class="segrow base"><div class="t"><span>買って持ち続けた場合</span><span class="num ${cls(benchM.totalPct)}">${pct(benchM.totalPct)}<small>-${benchM.maxDDPct.toFixed(0)}%</small></span></div>${strip(benchSeg, null)}</div>
-      ${exRows.map((r, i) => `<div class="segrow r" data-i="${i}"><div class="t"><span>${r.pass ? `<span class="star">★</span>` : ""}${esc(STRATEGIES[r.st].label)}<small>${esc(ruleText(r.c))}</small></span><span class="num"><b>${r.wins}/${K}勝</b><span class="${cls(r.M.totalPct)}">${pct(r.M.totalPct)}</span><small>-${r.M.maxDDPct.toFixed(0)}%</small></span></div>${strip(r.seg, r.ex)}</div>`).join("")}
-      <p class="hint">マスの数字は、その区間の損益（%）。<span style="background:rgba(52,140,90,.35);padding:0 4px;border-radius:3px">緑</span>は買い持ちに勝った区間、<span style="background:rgba(200,70,60,.3);padding:0 4px;border-radius:3px">赤</span>は負けた区間で、色が濃いほど差が大きい（差が0.5ポイント以内なら色なし＝引き分け）。右上は勝った区間の数、全期間の損益と最大下落。★は${need}区間以上で勝ち、全体の効率も上回ったもの。行をタップすると、その組み合わせで検証します。数値は各戦略の初期値で試しています。${skipped.length ? `<br>データが取れず試せなかった条件：${esc(skipped.join("、"))}` : ""}</p>`;
-    out.querySelectorAll(".segrow.r").forEach(tr => tr.onclick = () => {
-      const r = exRows[Number(tr.dataset.i)];
-      $("btStrategy").value = r.st; renderParams();
-      rgRows = r.c ? [{ ...r.c.row }] : []; renderRg();
-      $("btRun").click();
-    });
+    exState = { rows, segs, benchSeg, benchM, K, need, unit, skipped, dates };
+    renderEx();
   } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   finally { busy($("exRun"), false); }
 };
@@ -976,6 +1027,9 @@ renderParams();
 renderHist(); renderRecent();
 $("vBT").addEventListener("change", e => { if (e.target.closest("input,select")) saveForm(); });
 $("btClear").onclick = clearForm;
+// 自動探索の並べ方。選んだものを覚えておき、結果があれば並べかえる
+{ const v = store.get("st-exprio", "balance"); [...$("exPrio").children].forEach(b => b.classList.toggle("on", b.dataset.v === v)); }
+segInit("exPrio", v => { store.set("st-exprio", v); renderEx(); });
 $("histBtn").onclick = () => $("histBox").classList.toggle("hidden");
 $("histList").addEventListener("click", e => {
   const r = e.target.closest(".hrow"); if (!r) return;
